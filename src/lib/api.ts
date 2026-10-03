@@ -1,4 +1,4 @@
-import { User, AuthResponse, SsoProviderInfo } from '@/types/chat';
+import { User, AuthResponse, AuthTokens, SsoProviderInfo } from '@/types/chat';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
@@ -41,9 +41,43 @@ export const authStorage = {
   },
 };
 
+function formatErrorMessage(data: any, fallbackMessage: string): string {
+  if (!data) return fallbackMessage;
+  if (Array.isArray(data.message)) return data.message.join('. ');
+  if (typeof data.message === 'string') return data.message;
+  if (typeof data.error === 'string') return data.error;
+  return fallbackMessage;
+}
+
 export const api = {
   baseUrl: API_BASE_URL,
 
+  /**
+   * Health check to test backend connection
+   */
+  async checkHealth(): Promise<{ online: boolean; url: string; error?: string; latency?: number }> {
+    const startTime = performance.now();
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/sso/providers`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      const latency = Math.round(performance.now() - startTime);
+      if (res.ok) {
+        return { online: true, url: API_BASE_URL, latency };
+      }
+      return { online: false, url: API_BASE_URL, error: `HTTP ${res.status}: ${res.statusText}` };
+    } catch (err: any) {
+      return {
+        online: false,
+        url: API_BASE_URL,
+        error: err.name === 'TimeoutError' ? 'Connection timed out' : 'Backend server unreachable',
+      };
+    }
+  },
+
+  /**
+   * List configured SSO providers from backend
+   */
   async getSsoProviders(): Promise<SsoProviderInfo[]> {
     try {
       const res = await fetch(`${API_BASE_URL}/auth/sso/providers`, {
@@ -54,7 +88,7 @@ export const api = {
         return data.providers;
       }
     } catch (e) {
-      console.warn('API getSsoProviders failed, using default provider list', e);
+      console.warn('API getSsoProviders failed, using default provider list:', e);
     }
 
     // Default providers list
@@ -90,7 +124,10 @@ export const api = {
     ];
   },
 
-  async getSsoUrl(provider: string, redirectUri?: string): Promise<{ url: string; state?: string }> {
+  /**
+   * Fetch SSO initiation authorization URL
+   */
+  async getSsoUrl(provider: string, redirectUri?: string): Promise<{ url: string; state?: string; clientId?: string }> {
     try {
       const url = new URL(`${API_BASE_URL}/auth/sso/${provider}/url`);
       if (redirectUri) {
@@ -106,12 +143,39 @@ export const api = {
       console.warn('Could not fetch backend SSO URL:', e);
     }
 
-    // Fallback: direct to backend login redirect endpoint
+    // Direct fallback to backend login redirect endpoint
     return {
       url: `${API_BASE_URL}/auth/sso/${provider}/login`,
     };
   },
 
+  /**
+   * Exchange SSO authorization code for application JWT tokens
+   */
+  async exchangeSsoCode(
+    provider: string,
+    code: string,
+    redirectUri?: string,
+    state?: string,
+  ): Promise<AuthResponse> {
+    const res = await fetch(`${API_BASE_URL}/auth/sso/${provider}/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, redirectUri, state }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(formatErrorMessage(data, 'SSO Code exchange failed'));
+    }
+
+    authStorage.setSession(data);
+    return data;
+  },
+
+  /**
+   * Standard Email & Password Login
+   */
   async login(email: string, password: string): Promise<AuthResponse> {
     try {
       const res = await fetch(`${API_BASE_URL}/auth/login`, {
@@ -123,18 +187,18 @@ export const api = {
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.message || 'Login failed. Please check your credentials.');
+        throw new Error(formatErrorMessage(data, 'Login failed. Please check your credentials.'));
       }
 
       authStorage.setSession(data);
       return data;
     } catch (err: any) {
-      // If backend is unreachable or connection refused, allow quick local fallback demo
+      // If backend error is an explicit application error (e.g. 401 Invalid credentials), bubble it up
       if (err.message && !err.message.includes('fetch') && !err.message.includes('Failed to fetch')) {
         throw err;
       }
 
-      console.warn('Backend not responding to login, initializing local session for testing:', err);
+      console.warn('Backend not responding to login, initializing local fallback session for testing:', err);
       const mockUser: User = {
         id: 'user-demo-123',
         email,
@@ -154,6 +218,9 @@ export const api = {
     }
   },
 
+  /**
+   * Register new user account
+   */
   async register(email: string, password: string, name?: string): Promise<AuthResponse> {
     try {
       const res = await fetch(`${API_BASE_URL}/auth/register`, {
@@ -165,7 +232,7 @@ export const api = {
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.message || 'Registration failed.');
+        throw new Error(formatErrorMessage(data, 'Registration failed.'));
       }
 
       authStorage.setSession(data);
@@ -175,7 +242,7 @@ export const api = {
         throw err;
       }
 
-      console.warn('Backend not responding to register, creating local session for testing:', err);
+      console.warn('Backend not responding to register, creating local fallback session for testing:', err);
       const mockUser: User = {
         id: 'user-' + Math.random().toString(36).substring(2, 9),
         email,
@@ -195,6 +262,41 @@ export const api = {
     }
   },
 
+  /**
+   * Refresh session tokens
+   */
+  async refreshSession(): Promise<AuthTokens | null> {
+    const refreshToken = authStorage.getRefreshToken();
+    if (!refreshToken) return null;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const user = authStorage.getUser();
+        if (user) {
+          authStorage.setSession({
+            accessToken: data.accessToken,
+            refreshToken: data.refreshToken,
+            user,
+          });
+        }
+        return data;
+      }
+    } catch (e) {
+      console.warn('Failed to refresh token:', e);
+    }
+    return null;
+  },
+
+  /**
+   * Get authenticated user profile
+   */
   async getMe(): Promise<User | null> {
     const token = authStorage.getAccessToken();
     if (!token) return null;
@@ -205,10 +307,36 @@ export const api = {
           Authorization: `Bearer ${token}`,
         },
       });
+
       if (res.ok) {
         const user = await res.json();
-        authStorage.setSession({ accessToken: token, user });
+        authStorage.setSession({
+          accessToken: token,
+          refreshToken: authStorage.getRefreshToken() || undefined,
+          user,
+        });
         return user;
+      }
+
+      if (res.status === 401) {
+        // Try token refresh
+        const refreshed = await this.refreshSession();
+        if (refreshed?.accessToken) {
+          const retryRes = await fetch(`${API_BASE_URL}/auth/me`, {
+            headers: {
+              Authorization: `Bearer ${refreshed.accessToken}`,
+            },
+          });
+          if (retryRes.ok) {
+            const user = await retryRes.json();
+            authStorage.setSession({
+              accessToken: refreshed.accessToken,
+              refreshToken: refreshed.refreshToken,
+              user,
+            });
+            return user;
+          }
+        }
       }
     } catch (e) {
       console.warn('Failed to fetch user from backend, using cached profile:', e);
@@ -217,6 +345,34 @@ export const api = {
     return authStorage.getUser();
   },
 
+  /**
+   * Authenticated HTTP Fetch Helper with auto token refresh
+   */
+  async fetchWithAuth(endpoint: string, options: RequestInit = {}): Promise<Response> {
+    let token = authStorage.getAccessToken();
+    const url = endpoint.startsWith('http') ? endpoint : `${API_BASE_URL}${endpoint}`;
+
+    const headers = new Headers(options.headers || {});
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+
+    let response = await fetch(url, { ...options, headers });
+
+    if (response.status === 401 && authStorage.getRefreshToken()) {
+      const refreshed = await this.refreshSession();
+      if (refreshed?.accessToken) {
+        headers.set('Authorization', `Bearer ${refreshed.accessToken}`);
+        response = await fetch(url, { ...options, headers });
+      }
+    }
+
+    return response;
+  },
+
+  /**
+   * Log out and revoke session on backend
+   */
   async logout(): Promise<void> {
     const refreshToken = authStorage.getRefreshToken();
     if (refreshToken) {
@@ -233,6 +389,9 @@ export const api = {
     authStorage.clearSession();
   },
 
+  /**
+   * Link SSO Provider to current account
+   */
   async linkSsoProvider(provider: string, code: string): Promise<User> {
     const token = authStorage.getAccessToken();
     const res = await fetch(`${API_BASE_URL}/auth/sso/${provider}/link`, {
@@ -244,14 +403,17 @@ export const api = {
       body: JSON.stringify({ code }),
     });
 
+    const data = await res.json();
     if (!res.ok) {
-      const error = await res.json();
-      throw new Error(error.message || `Failed to link ${provider}`);
+      throw new Error(formatErrorMessage(data, `Failed to link ${provider}`));
     }
 
-    return await res.json();
+    return data;
   },
 
+  /**
+   * Unlink SSO Provider from current account
+   */
   async unlinkSsoProvider(provider: string): Promise<{ success: boolean; message: string }> {
     const token = authStorage.getAccessToken();
     const res = await fetch(`${API_BASE_URL}/auth/sso/${provider}/unlink`, {
@@ -261,11 +423,11 @@ export const api = {
       },
     });
 
+    const data = await res.json();
     if (!res.ok) {
-      const error = await res.json();
-      throw new Error(error.message || `Failed to unlink ${provider}`);
+      throw new Error(formatErrorMessage(data, `Failed to unlink ${provider}`));
     }
 
-    return await res.json();
-  }
+    return data;
+  },
 };

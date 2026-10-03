@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -45,6 +45,33 @@ export function AuthCard({ onSuccess }: AuthCardProps) {
   const [ssoLoadingProvider, setSsoLoadingProvider] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [backendStatus, setBackendStatus] = useState<{
+    checked: boolean;
+    online: boolean;
+    latency?: number;
+    url: string;
+  }>({
+    checked: false,
+    online: false,
+    url: api.baseUrl,
+  });
+
+  useEffect(() => {
+    let isMounted = true;
+    api.checkHealth().then((res) => {
+      if (isMounted) {
+        setBackendStatus({
+          checked: true,
+          online: res.online,
+          latency: res.latency,
+          url: res.url,
+        });
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const calculatePasswordStrength = (pass: string) => {
     let score = 0;
@@ -96,6 +123,14 @@ export function AuthCard({ onSuccess }: AuthCardProps) {
       const redirectUri = typeof window !== 'undefined'
         ? `${window.location.origin}/auth/callback`
         : undefined;
+
+      // Persist chosen provider and redirectUri for frontend callback handler
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('sso_provider', provider);
+        if (redirectUri) {
+          sessionStorage.setItem('sso_redirect_uri', redirectUri);
+        }
+      }
 
       const { url } = await api.getSsoUrl(provider, redirectUri);
       
@@ -161,16 +196,28 @@ export function AuthCard({ onSuccess }: AuthCardProps) {
       <div className="absolute -bottom-12 -right-12 w-64 h-64 bg-purple-500/20 rounded-full blur-3xl pointer-events-none" />
 
       <Card className="border border-border/80 bg-card/85 backdrop-blur-2xl shadow-2xl overflow-hidden rounded-3xl transition-all">
-        {/* Top Header Badge */}
-        <div className="bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-pink-500/10 border-b border-border/50 px-6 py-3.5 flex items-center justify-between">
+        {/* Top Header Badge showing real-time Backend status */}
+        <div className="bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-pink-500/10 border-b border-border/50 px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="text-xs font-semibold tracking-wide text-foreground/80 uppercase">
-              Next-Gen Secure Chat Platform
+            <div
+              className={`h-2.5 w-2.5 rounded-full ${
+                !backendStatus.checked
+                  ? 'bg-amber-400 animate-pulse'
+                  : backendStatus.online
+                  ? 'bg-emerald-500 shadow-sm shadow-emerald-500/50'
+                  : 'bg-rose-500'
+              }`}
+            />
+            <span className="text-xs font-semibold tracking-wide text-foreground/90">
+              {!backendStatus.checked
+                ? 'Checking backend...'
+                : backendStatus.online
+                ? `Backend: Online (${backendStatus.latency}ms)`
+                : 'Backend: Offline (Waiting)'}
             </span>
           </div>
           <Badge variant="brand" className="text-[10px] py-0 px-2 font-mono">
-            SSO + JWT v2.0
+            {backendStatus.url.replace(/^https?:\/\//, '')}
           </Badge>
         </div>
 

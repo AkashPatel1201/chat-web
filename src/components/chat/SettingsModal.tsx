@@ -6,9 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { User, SsoProviderId } from '@/types/chat';
-import { api } from '@/lib/api';
+import { api, getSsoRedirectUri } from '@/lib/api';
 import {
   Shield,
   CheckCircle,
@@ -100,7 +99,17 @@ export function SettingsModal({
     } else {
       // Initiate SSO linking
       try {
-        const { url } = await api.getSsoUrl(providerId);
+        const redirectUri = getSsoRedirectUri(providerId);
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('sso_provider', providerId);
+          if (redirectUri) {
+            sessionStorage.setItem('sso_redirect_uri', redirectUri);
+          }
+        }
+        const { url, redirectUri: confirmedRedirectUri } = await api.getSsoUrl(providerId, redirectUri);
+        if (typeof window !== 'undefined' && confirmedRedirectUri) {
+          sessionStorage.setItem('sso_redirect_uri', confirmedRedirectUri);
+        }
         if (url) {
           window.location.href = url;
         }

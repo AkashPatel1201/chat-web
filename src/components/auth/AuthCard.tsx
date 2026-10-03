@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
-import { api } from '@/lib/api';
+import { api, getSsoRedirectUri } from '@/lib/api';
 import { User, SsoProviderId } from '@/types/chat';
 import {
   Lock,
@@ -119,10 +119,8 @@ export function AuthCard({ onSuccess }: AuthCardProps) {
     setSsoLoadingProvider(provider);
 
     try {
-      // In Next.js, callback URL is /auth/callback
-      const redirectUri = typeof window !== 'undefined'
-        ? `${window.location.origin}/auth/callback`
-        : undefined;
+      // In multi-SSO architecture, use provider-specific callback URL (/auth/sso/[provider]/callback)
+      const redirectUri = getSsoRedirectUri(provider);
 
       // Persist chosen provider and redirectUri for frontend callback handler
       if (typeof window !== 'undefined') {
@@ -132,8 +130,12 @@ export function AuthCard({ onSuccess }: AuthCardProps) {
         }
       }
 
-      const { url } = await api.getSsoUrl(provider, redirectUri);
+      const { url, redirectUri: confirmedRedirectUri } = await api.getSsoUrl(provider, redirectUri);
       
+      if (typeof window !== 'undefined' && confirmedRedirectUri) {
+        sessionStorage.setItem('sso_redirect_uri', confirmedRedirectUri);
+      }
+
       // If valid URL returned, redirect
       if (url && (url.startsWith('http') || url.startsWith('/'))) {
         window.location.href = url;

@@ -49,8 +49,17 @@ function formatErrorMessage(data: any, fallbackMessage: string): string {
   return fallbackMessage;
 }
 
+/**
+ * Returns provider-specific OAuth2 redirect URI based on window origin
+ */
+export function getSsoRedirectUri(provider: string): string {
+  if (typeof window === 'undefined') return '';
+  return `${window.location.origin}/auth/sso/${provider.toLowerCase()}/callback`;
+}
+
 export const api = {
   baseUrl: API_BASE_URL,
+  getSsoRedirectUri,
 
   /**
    * Health check to test backend connection
@@ -127,25 +136,49 @@ export const api = {
   /**
    * Fetch SSO initiation authorization URL
    */
-  async getSsoUrl(provider: string, redirectUri?: string): Promise<{ url: string; state?: string; clientId?: string }> {
+  async getSsoUrl(
+    provider: string,
+    redirectUri?: string,
+  ): Promise<{ url: string; state?: string; clientId?: string; redirectUri?: string }> {
+    const targetRedirectUri = redirectUri || getSsoRedirectUri(provider);
+
     try {
       const url = new URL(`${API_BASE_URL}/auth/sso/${provider}/url`);
-      if (redirectUri) {
-        url.searchParams.set('redirectUri', redirectUri);
+      if (targetRedirectUri) {
+        url.searchParams.set('redirectUri', targetRedirectUri);
       }
       const res = await fetch(url.toString(), {
         signal: AbortSignal.timeout(3000),
       });
       if (res.ok) {
-        return await res.json();
+        const data = await res.json();
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('sso_provider', provider.toLowerCase());
+          if (data.redirectUri || targetRedirectUri) {
+            sessionStorage.setItem(
+              'sso_redirect_uri',
+              data.redirectUri || targetRedirectUri,
+            );
+          }
+        }
+        return data;
       }
     } catch (e) {
       console.warn('Could not fetch backend SSO URL:', e);
     }
 
     // Direct fallback to backend login redirect endpoint
+    const fallbackUrl = new URL(`${API_BASE_URL}/auth/sso/${provider}/login`);
+    if (targetRedirectUri) {
+      fallbackUrl.searchParams.set('redirectUri', targetRedirectUri);
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('sso_provider', provider.toLowerCase());
+        sessionStorage.setItem('sso_redirect_uri', targetRedirectUri);
+      }
+    }
     return {
-      url: `${API_BASE_URL}/auth/sso/${provider}/login`,
+      url: fallbackUrl.toString(),
+      redirectUri: targetRedirectUri,
     };
   },
 
@@ -158,10 +191,19 @@ export const api = {
     redirectUri?: string,
     state?: string,
   ): Promise<AuthResponse> {
+    const effectiveRedirectUri =
+      redirectUri ||
+      (typeof window !== 'undefined' ? sessionStorage.getItem('sso_redirect_uri') : null) ||
+      getSsoRedirectUri(provider);
+
     const res = await fetch(`${API_BASE_URL}/auth/sso/${provider}/exchange`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, redirectUri, state }),
+      body: JSON.stringify({
+        code,
+        redirectUri: effectiveRedirectUri || undefined,
+        state,
+      }),
     });
 
     const data = await res.json();

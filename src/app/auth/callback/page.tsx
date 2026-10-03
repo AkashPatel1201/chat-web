@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { authStorage, api } from '@/lib/api';
+import { authStorage, api, getSsoRedirectUri } from '@/lib/api';
 import { Loader2, CheckCircle2, AlertCircle, ArrowLeft, ShieldCheck } from 'lucide-react';
 
 /**
@@ -112,6 +112,7 @@ function CallbackContent() {
           const redirectUri =
             (typeof window !== 'undefined' &&
               sessionStorage.getItem('sso_redirect_uri')) ||
+            getSsoRedirectUri(detectedProvider) ||
             (typeof window !== 'undefined'
               ? `${window.location.origin}/auth/callback`
               : undefined);

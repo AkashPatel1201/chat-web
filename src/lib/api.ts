@@ -1,5 +1,23 @@
 import { User, AuthResponse, AuthTokens, SsoProviderInfo, Channel, DirectMessageConversation, Message, Reaction } from '@/types/chat';
 
+export function getApiBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    const configured = process.env.NEXT_PUBLIC_API_URL;
+    if (configured && !configured.includes('localhost') && !configured.includes('127.0.0.1')) {
+      return configured;
+    }
+    // If running in browser and accessed via LAN IP or hostname other than localhost/127.0.0.1
+    if (
+      window.location.hostname &&
+      window.location.hostname !== 'localhost' &&
+      window.location.hostname !== '127.0.0.1'
+    ) {
+      return `${window.location.protocol}//${window.location.hostname}:3000`;
+    }
+  }
+  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+}
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
 const ACCESS_TOKEN_KEY = 'chat_access_token';
@@ -58,7 +76,9 @@ export function getSsoRedirectUri(provider: string): string {
 }
 
 export const api = {
-  baseUrl: API_BASE_URL,
+  get baseUrl(): string {
+    return getApiBaseUrl();
+  },
   getSsoRedirectUri,
 
   /**

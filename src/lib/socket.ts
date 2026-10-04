@@ -1,6 +1,6 @@
 declare const process: any;
 
-import { authStorage } from './api';
+import { authStorage, api, getApiBaseUrl } from './api';
 import { Message, Reaction, User } from '@/types/chat';
 
 export type SocketEventMap = {
@@ -53,7 +53,7 @@ class WebSocketClient {
     this.isExplicitlyClosed = false;
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+      const apiUrl = getApiBaseUrl();
       const isHttps = apiUrl.startsWith('https') || (window.location.protocol === 'https:');
       const wsProtocol = isHttps ? 'wss:' : 'ws:';
       const cleanHost = apiUrl.replace(/^https?:\/\//, '');
@@ -79,18 +79,35 @@ class WebSocketClient {
         }
       };
 
-      this.ws.onclose = (event) => {
+      this.ws.onclose = async (event) => {
         this.isConnected = false;
         this.stopHeartbeat();
         this.emit('connection_change', { isConnected: false, reconnectAttempts: this.reconnectAttempts });
 
         if (!this.isExplicitlyClosed) {
+          if (event.code === 4001) {
+            // Authentication token expired or rejected by server - try refreshing token once
+            try {
+              const refreshed = await api.refreshSession();
+              if (refreshed?.accessToken) {
+                this.reconnectAttempts = 0;
+                this.connect();
+                return;
+              }
+            } catch (e) {
+              console.warn('Could not refresh token after socket auth error:', e);
+            }
+            console.warn('WebSocket unauthorized (code 4001) and session refresh failed. Pausing reconnection.');
+            return;
+          }
           this.scheduleReconnect();
         }
       };
 
       this.ws.onerror = (err) => {
-        console.warn('WebSocket connection error:', err);
+        if (this.reconnectAttempts < 3) {
+          console.warn('WebSocket connection error:', err);
+        }
       };
     } catch (err) {
       console.error('Failed to initialize WebSocket connection:', err);

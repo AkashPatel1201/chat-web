@@ -1,4 +1,4 @@
-import { User, AuthResponse, AuthTokens, SsoProviderInfo } from '@/types/chat';
+import { User, AuthResponse, AuthTokens, SsoProviderInfo, Channel, DirectMessageConversation, Message, Reaction } from '@/types/chat';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
@@ -471,5 +471,165 @@ export const api = {
     }
 
     return data;
+  },
+
+  /**
+   * CHANNELS API
+   */
+  async getChannels(): Promise<Channel[]> {
+    const res = await this.fetchWithAuth('/channels');
+    if (!res.ok) {
+      throw new Error('Failed to fetch channels');
+    }
+    return res.json();
+  },
+
+  async createChannel(data: {
+    name: string;
+    description?: string;
+    isPrivate?: boolean;
+    category?: string;
+  }): Promise<Channel> {
+    const res = await this.fetchWithAuth('/channels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      throw new Error(formatErrorMessage(result, 'Failed to create channel'));
+    }
+    return result;
+  },
+
+  async getChannelDetails(channelId: string): Promise<Channel> {
+    const res = await this.fetchWithAuth(`/channels/${encodeURIComponent(channelId)}`);
+    if (!res.ok) {
+      throw new Error('Failed to fetch channel details');
+    }
+    return res.json();
+  },
+
+  async joinChannel(channelId: string): Promise<Channel> {
+    const res = await this.fetchWithAuth(`/channels/${encodeURIComponent(channelId)}/join`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      throw new Error('Failed to join channel');
+    }
+    return res.json();
+  },
+
+  async getChannelMessages(channelId: string): Promise<Message[]> {
+    const res = await this.fetchWithAuth(`/channels/${encodeURIComponent(channelId)}/messages`);
+    if (!res.ok) {
+      throw new Error('Failed to fetch channel messages');
+    }
+    return res.json();
+  },
+
+  async sendChannelMessage(
+    channelId: string,
+    content: string,
+    attachments?: any[],
+  ): Promise<Message> {
+    const res = await this.fetchWithAuth(`/channels/${encodeURIComponent(channelId)}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, attachments }),
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      throw new Error(formatErrorMessage(result, 'Failed to send message'));
+    }
+    return result;
+  },
+
+  /**
+   * DIRECT MESSAGES API
+   */
+  async getDirectMessageConversations(): Promise<DirectMessageConversation[]> {
+    const res = await this.fetchWithAuth('/direct-messages');
+    if (!res.ok) {
+      throw new Error('Failed to fetch direct messages');
+    }
+    return res.json();
+  },
+
+  async getDirectMessages(userId: string): Promise<Message[]> {
+    const res = await this.fetchWithAuth(`/direct-messages/${encodeURIComponent(userId)}/messages`);
+    if (!res.ok) {
+      throw new Error('Failed to fetch messages');
+    }
+    return res.json();
+  },
+
+  async sendDirectMessage(
+    userId: string,
+    content: string,
+    attachments?: any[],
+  ): Promise<Message> {
+    const res = await this.fetchWithAuth(`/direct-messages/${encodeURIComponent(userId)}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, attachments }),
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      throw new Error(formatErrorMessage(result, 'Failed to send direct message'));
+    }
+    return result;
+  },
+
+  /**
+   * USERS API
+   */
+  async getUsers(search?: string): Promise<User[]> {
+    const query = search ? `?search=${encodeURIComponent(search)}` : '';
+    const res = await this.fetchWithAuth(`/users${query}`);
+    if (!res.ok) {
+      throw new Error('Failed to fetch users');
+    }
+    return res.json();
+  },
+
+  async updateUserStatus(status: string, statusMessage?: string): Promise<User> {
+    const res = await this.fetchWithAuth('/users/status', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, statusMessage }),
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      throw new Error(formatErrorMessage(result, 'Failed to update status'));
+    }
+    return result;
+  },
+
+  /**
+   * MESSAGES ACTIONS API (Reactions & Deletion)
+   */
+  async toggleReaction(messageId: string, emoji: string): Promise<Reaction[]> {
+    const res = await this.fetchWithAuth(`/messages/${encodeURIComponent(messageId)}/reactions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ emoji }),
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      throw new Error('Failed to toggle reaction');
+    }
+    return result;
+  },
+
+  async deleteMessage(messageId: string): Promise<{ success: boolean; messageId: string }> {
+    const res = await this.fetchWithAuth(`/messages/${encodeURIComponent(messageId)}`, {
+      method: 'DELETE',
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      throw new Error('Failed to delete message');
+    }
+    return result;
   },
 };

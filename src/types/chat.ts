@@ -77,6 +77,8 @@ export interface Channel {
   unreadCount?: number;
   memberCount: number;
   category: 'text' | 'voice' | 'announcements';
+  createdAt?: string;
+  members?: Array<User & { channelRole?: string; joinedAt?: string }>;
 }
 
 export interface DirectMessageConversation {

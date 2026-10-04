@@ -8,7 +8,6 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
@@ -28,7 +27,6 @@ import {
   AlertCircle,
   CheckCircle2,
   Loader2,
-  Flame,
 } from 'lucide-react';
 
 interface AuthCardProps {
@@ -167,28 +165,6 @@ export function AuthCard({ onSuccess }: AuthCardProps) {
     } finally {
       setSsoLoadingProvider(null);
     }
-  };
-
-  const handleQuickDemo = (role: 'admin' | 'dev') => {
-    const demoUser: User = {
-      id: role === 'admin' ? 'demo-admin-1' : 'demo-dev-2',
-      email: role === 'admin' ? 'lead.architect@chatflow.io' : 'alex.developer@chatflow.io',
-      name: role === 'admin' ? 'Elena Rostova (Lead)' : 'Alex Vance (FullStack)',
-      avatarUrl:
-        role === 'admin'
-          ? 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80'
-          : 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-      role: role === 'admin' ? 'ADMIN' : 'USER',
-      status: 'online',
-      statusMessage: role === 'admin' ? '🚀 Launching Chat Web v2' : '⚡ Writing clean code',
-      accounts: [
-        { id: 'acc-1', provider: 'GITHUB' },
-        { id: 'acc-2', provider: 'GOOGLE' },
-      ],
-    };
-
-    api.login(demoUser.email, 'password123').catch(() => {});
-    onSuccess(demoUser);
   };
 
   return (
@@ -499,32 +475,6 @@ export function AuthCard({ onSuccess }: AuthCardProps) {
             </form>
           </Tabs>
         </CardContent>
-
-        {/* Footer with One-Click Demo Previews */}
-        <CardFooter className="bg-muted/30 border-t border-border/50 px-6 py-4 flex flex-col gap-2">
-          <div className="w-full flex items-center justify-between text-xs text-muted-foreground">
-            <span className="flex items-center gap-1">
-              <Flame className="h-3.5 w-3.5 text-amber-500" />
-              Quick Preview Sandbox:
-            </span>
-            <div className="flex gap-1.5">
-              <button
-                type="button"
-                onClick={() => handleQuickDemo('admin')}
-                className="px-2 py-1 rounded-md bg-secondary hover:bg-secondary/80 text-[11px] font-medium text-foreground transition-all hover:scale-105"
-              >
-                Lead Admin
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickDemo('dev')}
-                className="px-2 py-1 rounded-md bg-secondary hover:bg-secondary/80 text-[11px] font-medium text-foreground transition-all hover:scale-105"
-              >
-                Developer
-              </button>
-            </div>
-          </div>
-        </CardFooter>
       </Card>
     </div>
   );

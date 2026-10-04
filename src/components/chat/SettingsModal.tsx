@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { User, SsoProviderId } from '@/types/chat';
 import { api, getSsoRedirectUri } from '@/lib/api';
 import {

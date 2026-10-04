@@ -120,7 +120,17 @@ export function MessageItem({
           )}
 
           <span className="text-[10px] text-muted-foreground font-mono">
-            {message.timestamp}
+            {(() => {
+              try {
+                if (message.timestamp.includes('T') || message.timestamp.includes('-')) {
+                  const d = new Date(message.timestamp);
+                  if (!isNaN(d.getTime())) {
+                    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                  }
+                }
+              } catch {}
+              return message.timestamp;
+            })()}
           </span>
 
           {message.isEdited && (

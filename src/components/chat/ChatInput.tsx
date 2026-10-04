@@ -20,6 +20,8 @@ interface ChatInputProps {
   placeholder?: string;
   onSendMessage: (content: string, attachments?: Attachment[]) => void;
   isAiResponding?: boolean;
+  onTyping?: () => void;
+  onStopTyping?: () => void;
 }
 
 const EMOJI_PALETTE = ['😀', '🔥', '🚀', '❤️', '🎉', '👍', '👀', '💡', '✨', '⚡', '💯', '🙌', '💻', '🥳', '😎', '🤖'];
@@ -28,6 +30,8 @@ export function ChatInput({
   placeholder = 'Type a message... (Shift + Enter for new line)',
   onSendMessage,
   isAiResponding,
+  onTyping,
+  onStopTyping,
 }: ChatInputProps) {
   const [text, setText] = useState('');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -38,6 +42,7 @@ export function ChatInput({
   const handleSend = () => {
     if ((!text.trim() && attachments.length === 0) || isAiResponding) return;
 
+    onStopTyping?.();
     onSendMessage(text.trim(), attachments.length > 0 ? attachments : undefined);
     setText('');
     setAttachments([]);
@@ -177,7 +182,14 @@ export function ChatInput({
         <textarea
           ref={textareaRef}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            if (e.target.value.trim()) {
+              onTyping?.();
+            } else {
+              onStopTyping?.();
+            }
+          }}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           rows={2}

@@ -36,6 +36,7 @@ interface SidebarProps {
   onOpenSettings: () => void;
   onLogout: () => void;
   onCreateChannel: (newChannel: { name: string; description: string; isPrivate: boolean }) => void;
+  onOpenNewDm?: () => void;
 }
 
 export function Sidebar({
@@ -49,6 +50,7 @@ export function Sidebar({
   onOpenSettings,
   onLogout,
   onCreateChannel,
+  onOpenNewDm,
 }: SidebarProps) {
   const [showChannels, setShowChannels] = useState(true);
   const [showDms, setShowDms] = useState(true);
@@ -124,18 +126,20 @@ export function Sidebar({
       {/* Navigation Quick Links */}
       <div className="px-3 py-1.5 space-y-0.5 border-b border-border/40 text-xs">
         <button
-          onClick={() => onSelectChannel('general')}
+          onClick={() => {
+            if (channels.length > 0) onSelectChannel(channels[0].id);
+          }}
           className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors font-medium text-xs"
         >
           <Bell className="h-3.5 w-3.5 text-indigo-400" />
-          <span>Activity & Mentions</span>
+          <span>Active Channels</span>
         </button>
         <button
-          onClick={() => onSelectChannel('dev-talk')}
+          onClick={onOpenNewDm}
           className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors font-medium text-xs"
         >
           <Compass className="h-3.5 w-3.5 text-purple-400" />
-          <span>Discover Channels</span>
+          <span>Start Direct Message</span>
         </button>
       </div>
 
@@ -217,7 +221,14 @@ export function Sidebar({
               ) : (
                 <ChevronRight className="h-3 w-3" />
               )}
-              <span>Direct Messages</span>
+              <span>Direct Messages ({filteredDms.length})</span>
+            </button>
+            <button
+              onClick={onOpenNewDm}
+              className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+              title="Start New Direct Message"
+            >
+              <Plus className="h-3.5 w-3.5" />
             </button>
           </div>
 
@@ -263,6 +274,18 @@ export function Sidebar({
                         }`}
                       >
                         AI
+                      </span>
+                    )}
+
+                    {Boolean(dm.unreadCount && dm.unreadCount > 0) && (
+                      <span
+                        className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                          isActive
+                            ? 'bg-white text-indigo-700'
+                            : 'bg-primary text-primary-foreground'
+                        }`}
+                      >
+                        {dm.unreadCount}
                       </span>
                     )}
                   </button>

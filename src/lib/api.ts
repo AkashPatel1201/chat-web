@@ -75,11 +75,28 @@ export function getSsoRedirectUri(provider: string): string {
   return `${window.location.origin}/auth/sso/${provider.toLowerCase()}/callback`;
 }
 
+let refreshPromise: Promise<AuthTokens | null> | null = null;
+
 export const api = {
   get baseUrl(): string {
     return getApiBaseUrl();
   },
   getSsoRedirectUri,
+
+  /**
+   * Clears session and redirects to the login page ('/') on unauthorized errors
+   */
+  handleUnauthorized(targetUrl: string = '/'): void {
+    if (typeof window === 'undefined') return;
+
+    authStorage.clearSession();
+    window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+
+    // If currently on another route, navigate to the root login screen
+    if (window.location.pathname !== targetUrl) {
+      window.location.href = targetUrl;
+    }
+  },
 
   /**
    * Health check to test backend connection
@@ -329,31 +346,49 @@ export const api = {
    */
   async refreshSession(): Promise<AuthTokens | null> {
     const refreshToken = authStorage.getRefreshToken();
-    if (!refreshToken) return null;
-
-    try {
-      const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const user = authStorage.getUser();
-        if (user) {
-          authStorage.setSession({
-            accessToken: data.accessToken,
-            refreshToken: data.refreshToken,
-            user,
-          });
-        }
-        return data;
-      }
-    } catch (e) {
-      console.warn('Failed to refresh token:', e);
+    if (!refreshToken) {
+      this.handleUnauthorized('/');
+      return null;
     }
-    return null;
+
+    if (refreshPromise) {
+      return refreshPromise;
+    }
+
+    refreshPromise = (async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const user = authStorage.getUser();
+          if (user) {
+            authStorage.setSession({
+              accessToken: data.accessToken,
+              refreshToken: data.refreshToken,
+              user,
+            });
+          }
+          return data;
+        }
+
+        // Any non-ok response from /auth/refresh means refresh token is invalid or expired
+        console.warn(`Session refresh returned HTTP ${res.status}. Redirecting to login.`);
+        this.handleUnauthorized('/');
+        return null;
+      } catch (e) {
+        console.warn('Failed to refresh token:', e);
+      }
+      return null;
+    })().finally(() => {
+      refreshPromise = null;
+    });
+
+    return refreshPromise;
   },
 
   /**
@@ -361,7 +396,9 @@ export const api = {
    */
   async getMe(): Promise<User | null> {
     const token = authStorage.getAccessToken();
-    if (!token) return null;
+    if (!token) {
+      return null;
+    }
 
     try {
       const res = await fetch(`${API_BASE_URL}/auth/me`, {
@@ -380,8 +417,8 @@ export const api = {
         return user;
       }
 
-      if (res.status === 401) {
-        // Try token refresh
+      if (res.status === 401 || res.status === 403) {
+        // Access token expired or invalid, attempt token refresh
         const refreshed = await this.refreshSession();
         if (refreshed?.accessToken) {
           const retryRes = await fetch(`${API_BASE_URL}/auth/me`, {
@@ -398,13 +435,25 @@ export const api = {
             });
             return user;
           }
+          if (retryRes.status === 401 || retryRes.status === 403) {
+            console.warn('/auth/me retry returned unauthorized after token refresh. Redirecting to login.');
+            this.handleUnauthorized('/');
+            return null;
+          }
+        } else {
+          // Token refresh failed or was unauthorized
+          this.handleUnauthorized('/');
+          return null;
         }
       }
     } catch (e) {
-      console.warn('Failed to fetch user from backend, using cached profile:', e);
+      console.warn('Failed to fetch user from backend, checking cached profile:', e);
+      if (authStorage.getAccessToken() && authStorage.getRefreshToken()) {
+        return authStorage.getUser();
+      }
     }
 
-    return authStorage.getUser();
+    return null;
   },
 
   /**
@@ -421,11 +470,20 @@ export const api = {
 
     let response = await fetch(url, { ...options, headers });
 
-    if (response.status === 401 && authStorage.getRefreshToken()) {
-      const refreshed = await this.refreshSession();
-      if (refreshed?.accessToken) {
-        headers.set('Authorization', `Bearer ${refreshed.accessToken}`);
-        response = await fetch(url, { ...options, headers });
+    if (response.status === 401 || response.status === 403) {
+      if (authStorage.getRefreshToken()) {
+        const refreshed = await this.refreshSession();
+        if (refreshed?.accessToken) {
+          headers.set('Authorization', `Bearer ${refreshed.accessToken}`);
+          response = await fetch(url, { ...options, headers });
+          if (response.status === 401 || response.status === 403) {
+            this.handleUnauthorized('/');
+          }
+        } else {
+          this.handleUnauthorized('/');
+        }
+      } else {
+        this.handleUnauthorized('/');
       }
     }
 
@@ -448,7 +506,7 @@ export const api = {
         // ignore logout network errors
       }
     }
-    authStorage.clearSession();
+    this.handleUnauthorized('/');
   },
 
   /**
@@ -652,4 +710,33 @@ export const api = {
     }
     return result;
   },
+
+  /**
+   * CALLS & AGORA API
+   */
+  async getAgoraToken(
+    channelName: string,
+    role: 'publisher' | 'subscriber' = 'publisher',
+  ): Promise<{
+    appId: string;
+    token: string | null;
+    channelName: string;
+    uid: string;
+    expireTime: number;
+  }> {
+    const res = await this.fetchWithAuth(
+      `/calls/token?channelName=${encodeURIComponent(channelName)}&role=${role}`,
+    );
+    const result = await res.json();
+    if (!res.ok) {
+      throw new Error(formatErrorMessage(result, 'Failed to generate Agora RTC token'));
+    }
+    return result;
+  },
+
+  async getAgoraConfig(): Promise<{ appId: string; hasCertificate: boolean }> {
+    const res = await fetch(`${this.baseUrl}/calls/config`);
+    return res.json();
+  },
 };
+

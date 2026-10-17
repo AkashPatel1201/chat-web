@@ -14,6 +14,56 @@ export type SocketEventMap = {
   user_status: { userId: string; status: 'online' | 'offline' };
   connection_change: { isConnected: boolean; reconnectAttempts: number };
   error: { message: string };
+  call_incoming: {
+    callId: string;
+    callerId: string;
+    callerName: string;
+    callerEmail?: string;
+    recipientId: string;
+    channelName: string;
+    callType: 'voice' | 'video';
+    timestamp: number;
+  };
+  call_ringing: {
+    callId: string;
+    recipientId: string;
+    channelName: string;
+    callType: 'voice' | 'video';
+  };
+  call_accepted: {
+    callId: string;
+    callerId: string;
+    recipientId: string;
+    recipientName?: string;
+    channelName: string;
+  };
+  call_rejected: {
+    callId: string;
+    recipientId: string;
+    reason?: string;
+  };
+  call_ended: {
+    callId?: string;
+    endedBy: string;
+    endedByName?: string;
+    channelName?: string;
+  };
+  channel_call_user_joined: {
+    channelId: string;
+    channelName: string;
+    callType: 'voice' | 'video';
+    user: { id: string; name?: string };
+  };
+  channel_call_user_left: {
+    channelId: string;
+    channelName?: string;
+    userId: string;
+  };
+  channel_call_ended: {
+    callId?: string;
+    endedBy: string;
+    channelName?: string;
+  };
 };
 
 type EventCallback<K extends keyof SocketEventMap> = (data: SocketEventMap[K]) => void;
@@ -98,6 +148,7 @@ class WebSocketClient {
               console.warn('Could not refresh token after socket auth error:', e);
             }
             console.warn('WebSocket unauthorized (code 4001) and session refresh failed. Pausing reconnection.');
+            api.handleUnauthorized();
             return;
           }
           this.scheduleReconnect();
@@ -201,6 +252,54 @@ class WebSocketClient {
   }
 
   /**
+   * Start 1-on-1 Call (Voice or Video)
+   */
+  public startCall(recipientId: string, channelName: string, callType: 'voice' | 'video', callId: string) {
+    this.send('call_user', { recipientId, channelName, callType, callId });
+  }
+
+  /**
+   * Accept incoming Call
+   */
+  public acceptCall(callerId: string, channelName: string, callId: string) {
+    this.send('call_accept', { callerId, channelName, callId });
+  }
+
+  /**
+   * Reject / Decline incoming Call
+   */
+  public rejectCall(callerId: string, callId: string, reason = 'declined') {
+    this.send('call_reject', { callerId, callId, reason });
+  }
+
+  /**
+   * End Call or Cancel outgoing call
+   */
+  public endCall(params: {
+    recipientId?: string;
+    callerId?: string;
+    channelId?: string;
+    channelName?: string;
+    callId?: string;
+  }) {
+    this.send('call_end', params);
+  }
+
+  /**
+   * Join Channel Group Call
+   */
+  public joinChannelCall(channelId: string, channelName: string, callType: 'voice' | 'video') {
+    this.send('channel_call_join', { channelId, channelName, callType });
+  }
+
+  /**
+   * Leave Channel Group Call
+   */
+  public leaveChannelCall(channelId: string, channelName?: string) {
+    this.send('channel_call_leave', { channelId, channelName });
+  }
+
+  /**
    * Generic sender with event payload
    */
   public send(event: string, data: any) {
@@ -253,3 +352,10 @@ class WebSocketClient {
 
 // Global singleton instance
 export const socketClient = new WebSocketClient();
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('auth:unauthorized', () => {
+    socketClient.disconnect();
+  });
+}
+

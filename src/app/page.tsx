@@ -20,24 +20,42 @@ export default function Home() {
     const checkSession = async () => {
       try {
         const storedUser = authStorage.getUser();
-        if (storedUser) {
-          setUser(storedUser);
-          // Try validating / refreshing with backend
+        const token = authStorage.getAccessToken();
+        if (storedUser && token) {
           try {
             const freshUser = await api.getMe();
-            if (freshUser) setUser(freshUser);
+            if (freshUser) {
+              setUser(freshUser);
+            } else {
+              setUser(null);
+            }
           } catch {
-            // keep cached user
+            if (!authStorage.getAccessToken()) {
+              setUser(null);
+            } else {
+              setUser(storedUser);
+            }
           }
+        } else {
+          setUser(null);
         }
       } catch (err) {
         console.warn('Session check failed:', err);
+        setUser(null);
       } finally {
         setIsLoading(false);
       }
     };
 
     checkSession();
+
+    const handleUnauthorizedEvent = () => {
+      setUser(null);
+    };
+    window.addEventListener('auth:unauthorized', handleUnauthorizedEvent);
+    return () => {
+      window.removeEventListener('auth:unauthorized', handleUnauthorizedEvent);
+    };
   }, []);
 
   const toggleTheme = () => {

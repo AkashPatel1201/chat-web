@@ -9,6 +9,8 @@ import { Sidebar } from './Sidebar';
 import { MessageItem } from './MessageItem';
 import { ChatInput } from './ChatInput';
 import { SettingsModal } from './SettingsModal';
+import { CallOverlay } from './CallOverlay';
+import { useAgoraCall } from '@/hooks/useAgoraCall';
 import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -72,6 +74,28 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isPollingRef = useRef(false);
+
+  // Agora Voice & Video RTC Call Manager
+  const {
+    callStatus,
+    activeCall,
+    callDuration,
+    isAudioMuted,
+    isVideoMuted,
+    isScreenSharing,
+    networkQuality,
+    remoteUsers,
+    localVideoTrack,
+    screenTrack,
+    startDirectCall,
+    startChannelCall,
+    acceptCall,
+    rejectCall,
+    endCall,
+    toggleAudio,
+    toggleVideo,
+    toggleScreenShare,
+  } = useAgoraCall(currentUser);
 
   // Auto scroll to bottom
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
@@ -510,16 +534,36 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
               <RefreshCw className="h-4 w-4" />
             </button>
             <button
-              onClick={() => alert('Secure voice call session initialized')}
-              className="p-2 rounded-xl text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              title="Voice Call"
+              onClick={() => {
+                if (activeDmId && activeDmUser) {
+                  startDirectCall(activeDmUser, 'voice');
+                } else if (currentChannel) {
+                  startChannelCall(currentChannel, 'voice');
+                }
+              }}
+              className="p-2 rounded-xl text-muted-foreground hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors cursor-pointer"
+              title={
+                activeDmUser
+                  ? `Voice Call ${activeDmUser.name || activeDmUser.email}`
+                  : `Start Voice Call in #${currentChannel?.name || 'chat'}`
+              }
             >
               <Phone className="h-4 w-4" />
             </button>
             <button
-              onClick={() => alert('HD Video conference session initialized')}
-              className="p-2 rounded-xl text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              title="Video Call"
+              onClick={() => {
+                if (activeDmId && activeDmUser) {
+                  startDirectCall(activeDmUser, 'video');
+                } else if (currentChannel) {
+                  startChannelCall(currentChannel, 'video');
+                }
+              }}
+              className="p-2 rounded-xl text-muted-foreground hover:text-indigo-400 hover:bg-indigo-500/10 transition-colors cursor-pointer"
+              title={
+                activeDmUser
+                  ? `HD Video Call ${activeDmUser.name || activeDmUser.email}`
+                  : `Start Video Call in #${currentChannel?.name || 'chat'}`
+              }
             >
               <Video className="h-4 w-4" />
             </button>
@@ -814,6 +858,26 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
         user={userProfile}
         onLogout={onLogout}
         onUserUpdate={setUserProfile}
+      />
+
+      {/* Agora RTC Voice & Video Calling Interface */}
+      <CallOverlay
+        callStatus={callStatus}
+        activeCall={activeCall}
+        callDuration={callDuration}
+        isAudioMuted={isAudioMuted}
+        isVideoMuted={isVideoMuted}
+        isScreenSharing={isScreenSharing}
+        networkQuality={networkQuality}
+        remoteUsers={remoteUsers}
+        localVideoTrack={localVideoTrack}
+        screenTrack={screenTrack}
+        onAccept={acceptCall}
+        onReject={rejectCall}
+        onEnd={endCall}
+        onToggleAudio={toggleAudio}
+        onToggleVideo={toggleVideo}
+        onToggleScreenShare={toggleScreenShare}
       />
     </div>
   );

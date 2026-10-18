@@ -35,8 +35,14 @@ interface SidebarProps {
   currentUser: User;
   onOpenSettings: () => void;
   onLogout: () => void;
-  onCreateChannel: (newChannel: { name: string; description: string; isPrivate: boolean }) => void;
+  onCreateChannel: (newChannel: {
+    name: string;
+    description: string;
+    isPrivate: boolean;
+    memberIds?: string[];
+  }) => void;
   onOpenNewDm?: () => void;
+  registeredUsers?: User[];
 }
 
 export function Sidebar({
@@ -51,6 +57,7 @@ export function Sidebar({
   onLogout,
   onCreateChannel,
   onOpenNewDm,
+  registeredUsers = [],
 }: SidebarProps) {
   const [showChannels, setShowChannels] = useState(true);
   const [showDms, setShowDms] = useState(true);
@@ -59,6 +66,8 @@ export function Sidebar({
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelDesc, setNewChannelDesc] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
+  const [memberFilter, setMemberFilter] = useState('');
 
   const filteredChannels = channels.filter((c) =>
     c.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -68,6 +77,16 @@ export function Sidebar({
     (dm.user.name || dm.user.email).toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const availableUsers = registeredUsers.filter((u) => {
+    if (u.id === currentUser.id) return false;
+    if (!memberFilter.trim()) return true;
+    const query = memberFilter.toLowerCase();
+    return (
+      (u.name && u.name.toLowerCase().includes(query)) ||
+      u.email.toLowerCase().includes(query)
+    );
+  });
+
   const handleCreateChannelSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newChannelName.trim()) return;
@@ -76,11 +95,14 @@ export function Sidebar({
       name: newChannelName.trim().toLowerCase().replace(/\s+/g, '-'),
       description: newChannelDesc.trim() || 'General discussion',
       isPrivate,
+      memberIds: isPrivate ? selectedMemberIds : undefined,
     });
 
     setNewChannelName('');
     setNewChannelDesc('');
     setIsPrivate(false);
+    setSelectedMemberIds([]);
+    setMemberFilter('');
     setIsAddChannelOpen(false);
   };
 
@@ -386,7 +408,12 @@ export function Sidebar({
               type="checkbox"
               id="isPrivate"
               checked={isPrivate}
-              onChange={(e) => setIsPrivate(e.target.checked)}
+              onChange={(e) => {
+                setIsPrivate(e.target.checked);
+                if (!e.target.checked) {
+                  setSelectedMemberIds([]);
+                }
+              }}
               className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
             />
             <label htmlFor="isPrivate" className="text-xs text-foreground font-medium cursor-pointer">
@@ -394,11 +421,88 @@ export function Sidebar({
             </label>
           </div>
 
+          {isPrivate && (
+            <div className="space-y-2 pt-2 border-t border-border/50">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold">
+                  Invite Members ({selectedMemberIds.length} selected)
+                </Label>
+                {selectedMemberIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedMemberIds([])}
+                    className="text-[10px] text-muted-foreground hover:text-primary"
+                  >
+                    Clear all
+                  </button>
+                )}
+              </div>
+              <Input
+                placeholder="Filter teammates to invite..."
+                value={memberFilter}
+                onChange={(e) => setMemberFilter(e.target.value)}
+                className="h-8 text-xs rounded-lg"
+              />
+              <div className="max-h-36 overflow-y-auto space-y-1 pr-1 divide-y divide-border/20">
+                {availableUsers.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground py-2 text-center">
+                    No teammates found
+                  </p>
+                ) : (
+                  availableUsers.map((u) => {
+                    const isSelected = selectedMemberIds.includes(u.id);
+                    return (
+                      <div
+                        key={u.id}
+                        onClick={() => {
+                          setSelectedMemberIds((prev) =>
+                            isSelected ? prev.filter((id) => id !== u.id) : [...prev, u.id],
+                          );
+                        }}
+                        className={`flex items-center justify-between p-1.5 rounded-lg cursor-pointer transition-colors ${
+                          isSelected
+                            ? 'bg-primary/10 text-foreground font-medium'
+                            : 'hover:bg-accent/50 text-muted-foreground'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <Avatar
+                            src={u.avatarUrl}
+                            fallback={u.name || u.email}
+                            size="sm"
+                            status={u.status || 'offline'}
+                            className="h-6 w-6"
+                          />
+                          <div className="truncate text-left">
+                            <p className="text-xs font-medium text-foreground truncate">
+                              {u.name || u.email.split('@')[0]}
+                            </p>
+                            <p className="text-[10px] text-muted-foreground truncate">{u.email}</p>
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => {}}
+                          className="h-3.5 w-3.5 rounded border-border text-primary pointer-events-none"
+                        />
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+
           <DialogFooter>
             <Button
               type="button"
               variant="outline"
-              onClick={() => setIsAddChannelOpen(false)}
+              onClick={() => {
+                setIsAddChannelOpen(false);
+                setSelectedMemberIds([]);
+                setMemberFilter('');
+              }}
               className="rounded-xl text-xs"
             >
               Cancel

@@ -42,6 +42,7 @@ import {
   UserPlus,
   Loader2,
   RefreshCw,
+  Lock,
 } from 'lucide-react';
 
 interface ChatViewProps {
@@ -70,6 +71,10 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isNewDmOpen, setIsNewDmOpen] = useState(false);
   const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
+  const [addMemberSearch, setAddMemberSearch] = useState('');
+  const [selectedUsersToAdd, setSelectedUsersToAdd] = useState<string[]>([]);
+  const [isAddingMembers, setIsAddingMembers] = useState(false);
   
   const [showRightSidebar, setShowRightSidebar] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -297,19 +302,69 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
     name: string;
     description: string;
     isPrivate: boolean;
+    memberIds?: string[];
   }) => {
     try {
       const created = await api.createChannel({
         name: newChan.name,
         description: newChan.description,
         isPrivate: newChan.isPrivate,
+        memberIds: newChan.memberIds,
       });
       setChannels((prev) => [...prev, created]);
       setActiveChannelId(created.id);
       setActiveDmId(null);
       setActiveDmUser(null);
+      api.getChannelDetails(created.id).then(setChannelDetails).catch(() => {});
     } catch (err: any) {
       alert(err.message || 'Failed to create channel');
+    }
+  };
+
+  // Add Members to Active Channel
+  const handleAddMembersSubmit = async () => {
+    if (!activeChannelId || selectedUsersToAdd.length === 0) return;
+    setIsAddingMembers(true);
+    try {
+      const updated = await api.addChannelMembers(activeChannelId, selectedUsersToAdd);
+      setChannelDetails(updated);
+      setChannels((prev) =>
+        prev.map((c) => (c.id === activeChannelId ? { ...c, memberCount: updated.memberCount } : c)),
+      );
+      setIsAddMemberOpen(false);
+      setSelectedUsersToAdd([]);
+      setAddMemberSearch('');
+    } catch (err: any) {
+      alert(err.message || 'Failed to add members');
+    } finally {
+      setIsAddingMembers(false);
+    }
+  };
+
+  // Remove Member from Active Channel
+  const handleRemoveMember = async (memberId: string) => {
+    if (!activeChannelId) return;
+    const member = channelDetails?.members?.find((m) => m.id === memberId);
+    const confirmName = member?.name || member?.email || 'this member';
+    if (!confirm(`Are you sure you want to remove ${confirmName} from #${currentChannel?.name}?`)) return;
+
+    try {
+      await api.removeChannelMember(activeChannelId, memberId);
+      setChannelDetails((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          memberCount: Math.max(1, (prev.members?.length || 1) - 1),
+          members: prev.members?.filter((m) => m.id !== memberId),
+        };
+      });
+      setChannels((prev) =>
+        prev.map((c) =>
+          c.id === activeChannelId ? { ...c, memberCount: Math.max(1, c.memberCount - 1) } : c,
+        ),
+      );
+    } catch (err: any) {
+      alert(err.message || 'Failed to remove member');
     }
   };
 
@@ -398,6 +453,65 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
       },
       [activeDmUser],
     ),
+    onChannelMemberAdded: useCallback(
+      ({ channelId, channel }: { channelId: string; channel?: Channel }) => {
+        if (channel) {
+          setChannels((prev) =>
+            prev.map((c) => (c.id === channelId ? { ...c, memberCount: channel.memberCount } : c)),
+          );
+        }
+        if (activeChannelId === channelId) {
+          if (channel) {
+            setChannelDetails(channel);
+          } else {
+            api.getChannelDetails(channelId).then(setChannelDetails).catch(() => {});
+          }
+        }
+      },
+      [activeChannelId],
+    ),
+    onChannelMemberRemoved: useCallback(
+      ({ channelId, userId }: { channelId: string; userId: string }) => {
+        if (userId === currentUser.id) {
+          setChannels((prev) => prev.filter((c) => c.id !== channelId));
+          if (activeChannelId === channelId) {
+            setActiveChannelId((prev) => channels.find((c) => c.id !== channelId)?.id || '');
+          }
+        } else {
+          setChannels((prev) =>
+            prev.map((c) =>
+              c.id === channelId ? { ...c, memberCount: Math.max(1, c.memberCount - 1) } : c,
+            ),
+          );
+          if (activeChannelId === channelId) {
+            setChannelDetails((prev) => {
+              if (!prev) return null;
+              return {
+                ...prev,
+                memberCount: Math.max(1, (prev.members?.length || 1) - 1),
+                members: prev.members?.filter((m) => m.id !== userId),
+              };
+            });
+          }
+        }
+      },
+      [activeChannelId, channels, currentUser.id],
+    ),
+    onChannelJoined: useCallback(({ channel }: { channel: Channel }) => {
+      setChannels((prev) => {
+        if (prev.some((c) => c.id === channel.id)) return prev;
+        return [...prev, channel];
+      });
+    }, []),
+    onChannelLeft: useCallback(
+      ({ channelId }: { channelId: string }) => {
+        setChannels((prev) => prev.filter((c) => c.id !== channelId));
+        if (activeChannelId === channelId) {
+          setActiveChannelId((prev) => channels.find((c) => c.id !== channelId)?.id || '');
+        }
+      },
+      [activeChannelId, channels],
+    ),
   });
 
   // Send message
@@ -478,6 +592,15 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
     return nameMatch || emailMatch;
   });
 
+  const filteredUsersToAdd = registeredUsers.filter((u) => {
+    if (u.id === userProfile.id) return false;
+    if (!addMemberSearch.trim()) return true;
+    const query = addMemberSearch.toLowerCase();
+    const nameMatch = u.name ? u.name.toLowerCase().includes(query) : false;
+    const emailMatch = u.email.toLowerCase().includes(query);
+    return nameMatch || emailMatch;
+  });
+
   if (isLoadingInitial) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-background">
@@ -527,6 +650,7 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
             setUserSearchQuery('');
             setIsNewDmOpen(true);
           }}
+          registeredUsers={registeredUsers}
         />
       </div>
 
@@ -570,10 +694,19 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
               /* Channel Header */
               <div className="truncate">
                 <div className="flex items-center gap-2">
-                  <Hash className="h-4 w-4 text-indigo-400 shrink-0" />
+                  {currentChannel.isPrivate ? (
+                    <Lock className="h-4 w-4 text-amber-400 shrink-0" />
+                  ) : (
+                    <Hash className="h-4 w-4 text-indigo-400 shrink-0" />
+                  )}
                   <span className="font-bold text-sm text-foreground truncate">
                     {currentChannel.name}
                   </span>
+                  {currentChannel.isPrivate && (
+                    <Badge variant="outline" className="text-[9px] py-0 font-medium text-amber-400 border-amber-500/30 bg-amber-500/10 hidden sm:inline-flex">
+                      Private
+                    </Badge>
+                  )}
                   <Badge variant="outline" className="text-[10px] py-0 text-muted-foreground hidden sm:inline-flex">
                     {channelDetails?.memberCount || currentChannel.memberCount || 1} members
                   </Badge>
@@ -620,6 +753,19 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
             >
               <RefreshCw className="h-4 w-4" />
             </button>
+            {currentChannel && (
+              <button
+                onClick={() => {
+                  setSelectedUsersToAdd([]);
+                  setAddMemberSearch('');
+                  setIsAddMemberOpen(true);
+                }}
+                className="p-2 rounded-xl text-muted-foreground hover:text-indigo-400 hover:bg-indigo-500/10 transition-colors cursor-pointer"
+                title={`Add Members to #${currentChannel.name}`}
+              >
+                <UserPlus className="h-4 w-4" />
+              </button>
+            )}
             <button
               onClick={() => {
                 if (activeDmId && activeDmUser) {
@@ -673,18 +819,46 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
           {/* Welcome Banner */}
           <div className="py-6 px-4 rounded-2xl bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-transparent border border-border/60 mb-4">
             <div className="flex items-center gap-2 mb-1">
-              <Sparkles className="h-5 w-5 text-indigo-400" />
+              {currentChannel?.isPrivate ? (
+                <Lock className="h-5 w-5 text-amber-400" />
+              ) : (
+                <Sparkles className="h-5 w-5 text-indigo-400" />
+              )}
               <h2 className="text-base font-bold text-foreground">
                 {activeDmId && activeDmUser
                   ? `Direct message with ${activeDmUser.name || activeDmUser.email}`
                   : `Welcome to #${currentChannel?.name || 'chat'}`}
               </h2>
+              {currentChannel?.isPrivate && (
+                <Badge variant="outline" className="text-[10px] text-amber-400 border-amber-500/30 bg-amber-500/10">
+                  Private Channel
+                </Badge>
+              )}
             </div>
             <p className="text-xs text-muted-foreground">
               {activeDmId && activeDmUser
                 ? 'Direct messages are private between you two and stored securely in PostgreSQL.'
+                : currentChannel?.isPrivate
+                ? 'This is a private channel. Only invited members can view discussions and messages.'
                 : currentChannel?.description || 'Collaborate with your team in real time!'}
             </p>
+            {currentChannel?.isPrivate && (
+              <div className="mt-3 flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="glow"
+                  onClick={() => {
+                    setSelectedUsersToAdd([]);
+                    setAddMemberSearch('');
+                    setIsAddMemberOpen(true);
+                  }}
+                  className="text-xs rounded-xl flex items-center gap-1.5"
+                >
+                  <UserPlus className="h-3.5 w-3.5" />
+                  Add Members to Private Channel
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* Loading indicator */}
@@ -807,10 +981,14 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
                     Members ({channelDetails?.members?.length || 1})
                   </span>
                   <button
-                    onClick={() => setIsNewDmOpen(true)}
-                    className="text-[10px] text-primary hover:underline flex items-center gap-1 font-medium"
+                    onClick={() => {
+                      setSelectedUsersToAdd([]);
+                      setAddMemberSearch('');
+                      setIsAddMemberOpen(true);
+                    }}
+                    className="text-[11px] text-primary hover:underline flex items-center gap-1 font-semibold"
                   >
-                    <UserPlus className="h-3 w-3" /> Add / DM
+                    <UserPlus className="h-3.5 w-3.5" /> Add Members
                   </button>
                 </div>
 
@@ -856,13 +1034,25 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
                           </div>
                         </div>
 
-                        <button
-                          onClick={() => handleStartDirectMessage(member)}
-                          className="opacity-0 group-hover:opacity-100 p-1 text-primary hover:bg-primary/20 rounded transition-all"
-                          title="Message this teammate"
-                        >
-                          <MessageSquare className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleStartDirectMessage(member)}
+                            className="opacity-0 group-hover:opacity-100 p-1 text-primary hover:bg-primary/20 rounded transition-all"
+                            title="Message this teammate"
+                          >
+                            <MessageSquare className="h-3.5 w-3.5" />
+                          </button>
+                          {(channelDetails?.currentUserRole === 'OWNER' ||
+                            currentChannel?.createdById === userProfile.id) && (
+                            <button
+                              onClick={() => handleRemoveMember(member.id)}
+                              className="opacity-0 group-hover:opacity-100 p-1 text-destructive hover:bg-destructive/20 rounded transition-all"
+                              title="Remove from channel"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </div>
                     ))}
                 </div>
@@ -942,6 +1132,147 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
             className="rounded-xl text-xs"
           >
             Cancel
+          </Button>
+        </DialogFooter>
+      </Dialog>
+
+      {/* Add Members to Channel Modal */}
+      <Dialog open={isAddMemberOpen} onOpenChange={setIsAddMemberOpen}>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <UserPlus className="h-5 w-5 text-indigo-400" />
+            <span>Add Members to #{currentChannel?.name}</span>
+          </DialogTitle>
+          <DialogDescription>
+            {currentChannel?.isPrivate
+              ? 'This is a private channel. Only invited members can view discussions and messages.'
+              : 'Invite teammates from your workspace to this channel.'}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              value={addMemberSearch}
+              onChange={(e) => setAddMemberSearch(e.target.value)}
+              placeholder="Search teammates by name or email..."
+              className="pl-9 rounded-xl text-xs"
+              autoFocus
+            />
+          </div>
+
+          <div className="max-h-64 overflow-y-auto space-y-1 divide-y divide-border/30">
+            {filteredUsersToAdd.length === 0 ? (
+              <p className="text-center text-xs text-muted-foreground py-6">
+                No teammates found matching "{addMemberSearch}"
+              </p>
+            ) : (
+              filteredUsersToAdd.map((u) => {
+                const isMember = channelDetails?.members?.some((m) => m.id === u.id);
+                const isSelected = selectedUsersToAdd.includes(u.id);
+
+                return (
+                  <div
+                    key={u.id}
+                    onClick={() => {
+                      if (isMember) return;
+                      setSelectedUsersToAdd((prev) =>
+                        isSelected ? prev.filter((id) => id !== u.id) : [...prev, u.id],
+                      );
+                    }}
+                    className={`flex items-center justify-between p-2.5 rounded-xl transition-colors ${
+                      isMember
+                        ? 'opacity-60 cursor-default bg-secondary/20'
+                        : isSelected
+                        ? 'bg-primary/10 border border-primary/30 cursor-pointer'
+                        : 'hover:bg-accent/60 cursor-pointer'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Avatar
+                        src={u.avatarUrl}
+                        fallback={u.name || u.email}
+                        size="md"
+                        status={u.status || 'offline'}
+                      />
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-foreground">
+                            {u.name || u.email.split('@')[0]}
+                          </span>
+                          <Badge variant="brand" className="text-[9px] py-0 font-mono">
+                            {u.role}
+                          </Badge>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">{u.email}</p>
+                      </div>
+                    </div>
+
+                    {isMember ? (
+                      <span className="text-[10px] text-muted-foreground bg-secondary px-2 py-0.5 rounded-md font-medium">
+                        Already in channel
+                      </span>
+                    ) : (
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => {}}
+                        className="h-4 w-4 rounded border-border text-primary pointer-events-none"
+                      />
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div className="flex items-center justify-between pt-2 border-t border-border/40 text-xs">
+            <span className="text-muted-foreground font-medium">
+              {selectedUsersToAdd.length} member{selectedUsersToAdd.length === 1 ? '' : 's'} selected
+            </span>
+            {selectedUsersToAdd.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSelectedUsersToAdd([])}
+                className="text-xs text-primary hover:underline"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setIsAddMemberOpen(false);
+              setSelectedUsersToAdd([]);
+              setAddMemberSearch('');
+            }}
+            className="rounded-xl text-xs"
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="glow"
+            onClick={handleAddMembersSubmit}
+            disabled={selectedUsersToAdd.length === 0 || isAddingMembers}
+            className="rounded-xl text-xs flex items-center gap-1.5"
+          >
+            {isAddingMembers ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Adding...
+              </>
+            ) : (
+              <>
+                <UserPlus className="h-3.5 w-3.5" />
+                Add {selectedUsersToAdd.length > 0 ? `(${selectedUsersToAdd.length})` : ''} to Channel
+              </>
+            )}
           </Button>
         </DialogFooter>
       </Dialog>

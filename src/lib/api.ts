@@ -567,6 +567,7 @@ export const api = {
     description?: string;
     isPrivate?: boolean;
     category?: string;
+    memberIds?: string[];
   }): Promise<Channel> {
     const res = await this.fetchWithAuth('/channels', {
       method: 'POST',
@@ -586,6 +587,33 @@ export const api = {
       throw new Error('Failed to fetch channel details');
     }
     return res.json();
+  },
+
+  async addChannelMembers(channelId: string, userIds: string[]): Promise<Channel> {
+    const res = await this.fetchWithAuth(`/channels/${encodeURIComponent(channelId)}/members`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userIds }),
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      throw new Error(formatErrorMessage(result, 'Failed to add members to channel'));
+    }
+    return result;
+  },
+
+  async removeChannelMember(channelId: string, memberId: string): Promise<{ success: boolean }> {
+    const res = await this.fetchWithAuth(
+      `/channels/${encodeURIComponent(channelId)}/members/${encodeURIComponent(memberId)}`,
+      {
+        method: 'DELETE',
+      },
+    );
+    const result = await res.json();
+    if (!res.ok) {
+      throw new Error(formatErrorMessage(result, 'Failed to remove channel member'));
+    }
+    return result;
   },
 
   async joinChannel(channelId: string): Promise<Channel> {

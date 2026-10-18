@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { socketClient } from '@/lib/socket';
-import { Message, Reaction, User } from '@/types/chat';
+import { Channel, Message, Reaction, User } from '@/types/chat';
 
 interface UseChatSocketProps {
   currentUser: User | null;
@@ -12,6 +12,10 @@ interface UseChatSocketProps {
   onReactionUpdate: (data: { messageId: string; reactions: Reaction[] }) => void;
   onMessageDelete: (data: { messageId: string; channelId?: string }) => void;
   onUserStatusChange?: (data: { userId: string; status: 'online' | 'offline' }) => void;
+  onChannelMemberAdded?: (data: { channelId: string; channel?: Channel; addedUserIds: string[] }) => void;
+  onChannelMemberRemoved?: (data: { channelId: string; userId: string }) => void;
+  onChannelJoined?: (data: { channel: Channel }) => void;
+  onChannelLeft?: (data: { channelId: string }) => void;
 }
 
 export function useChatSocket({
@@ -22,6 +26,10 @@ export function useChatSocket({
   onReactionUpdate,
   onMessageDelete,
   onUserStatusChange,
+  onChannelMemberAdded,
+  onChannelMemberRemoved,
+  onChannelJoined,
+  onChannelLeft,
 }: UseChatSocketProps) {
   const [isConnected, setIsConnected] = useState(false);
   const [typingUsers, setTypingUsers] = useState<{ id: string; name: string }[]>([]);
@@ -128,6 +136,30 @@ export function useChatSocket({
       );
     });
 
+    const unsubMemberAdded = socketClient.on('channel_member_added', (data) => {
+      if (onChannelMemberAdded) {
+        onChannelMemberAdded(data);
+      }
+    });
+
+    const unsubMemberRemoved = socketClient.on('channel_member_removed', (data) => {
+      if (onChannelMemberRemoved) {
+        onChannelMemberRemoved(data);
+      }
+    });
+
+    const unsubChannelJoined = socketClient.on('channel_joined', (data) => {
+      if (onChannelJoined) {
+        onChannelJoined(data);
+      }
+    });
+
+    const unsubChannelLeft = socketClient.on('channel_left', (data) => {
+      if (onChannelLeft) {
+        onChannelLeft(data);
+      }
+    });
+
     return () => {
       unsubChannelMsg();
       unsubDmMsg();
@@ -136,6 +168,10 @@ export function useChatSocket({
       unsubStatus();
       unsubTyping();
       unsubStopTyping();
+      unsubMemberAdded();
+      unsubMemberRemoved();
+      unsubChannelJoined();
+      unsubChannelLeft();
     };
   }, [
     currentUser,
@@ -145,6 +181,10 @@ export function useChatSocket({
     onReactionUpdate,
     onMessageDelete,
     onUserStatusChange,
+    onChannelMemberAdded,
+    onChannelMemberRemoved,
+    onChannelJoined,
+    onChannelLeft,
   ]);
 
   // Clean up all timers on unmount

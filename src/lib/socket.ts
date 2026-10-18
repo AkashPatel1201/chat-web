@@ -1,7 +1,5 @@
-declare const process: any;
-
 import { authStorage, api, getApiBaseUrl } from './api';
-import { Message, Reaction, User } from '@/types/chat';
+import { Channel, Message, Reaction, User } from '@/types/chat';
 
 export type SocketEventMap = {
   connected: { status: string; userId: string; name?: string; channels?: string[] };
@@ -63,6 +61,21 @@ export type SocketEventMap = {
     callId?: string;
     endedBy: string;
     channelName?: string;
+  };
+  channel_member_added: {
+    channelId: string;
+    channel?: Channel;
+    addedUserIds: string[];
+  };
+  channel_member_removed: {
+    channelId: string;
+    userId: string;
+  };
+  channel_joined: {
+    channel: Channel;
+  };
+  channel_left: {
+    channelId: string;
   };
 };
 

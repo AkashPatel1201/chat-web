@@ -78,6 +78,9 @@ export interface Channel {
   memberCount: number;
   category: 'text' | 'voice' | 'announcements';
   createdAt?: string;
+  createdById?: string | null;
+  currentUserRole?: string | null;
+  isMember?: boolean;
   members?: Array<User & { channelRole?: string; joinedAt?: string }>;
 }
 

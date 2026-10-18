@@ -70,12 +70,21 @@ export function CallOverlay({
 
   // Bind local video track to DOM container
   useEffect(() => {
-    if (localVideoRef.current) {
-      if (isScreenSharing && screenTrack) {
-        screenTrack.play(localVideoRef.current);
-      } else if (localVideoTrack && !isVideoMuted) {
-        localVideoTrack.play(localVideoRef.current);
-      }
+    const container = localVideoRef.current;
+    if (!container) return;
+
+    // Stop any existing playback on this element before starting a new one
+    // to avoid the "play() interrupted by pause()" DOMException.
+    if (isScreenSharing && screenTrack) {
+      screenTrack.stop();
+      ;(async () => {
+        try { screenTrack.play(container); } catch (e) {}
+      })();
+    } else if (localVideoTrack && !isVideoMuted) {
+      localVideoTrack.stop();
+      ;(async () => {
+        try { localVideoTrack.play(container); } catch (e) {}
+      })();
     }
   }, [localVideoTrack, screenTrack, isScreenSharing, isVideoMuted, callStatus]);
 
@@ -84,7 +93,11 @@ export function CallOverlay({
     remoteUsers.forEach((user) => {
       const container = remoteVideoRefs.current.get(user.uid);
       if (container && user.videoTrack) {
-        user.videoTrack.play(container);
+        // Stop before re-playing to avoid play/pause race condition
+        user.videoTrack.stop();
+        ;(async () => {
+          try { user.videoTrack!.play(container); } catch (e) {}
+        })();
       }
     });
   }, [remoteUsers, callStatus]);

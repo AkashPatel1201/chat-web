@@ -738,5 +738,59 @@ export const api = {
     const res = await fetch(`${this.baseUrl}/calls/config`);
     return res.json();
   },
+
+  /**
+   * CALL HISTORY API
+   */
+
+  /** Persist a call history entry to the backend */
+  async saveCallHistory(entry: {
+    callId: string;
+    callType: 'voice' | 'video';
+    status: 'ended' | 'missed' | 'declined' | 'outgoing';
+    isDirect: boolean;
+    recipientId?: string;
+    channelName?: string;
+    durationSeconds?: number;
+  }): Promise<void> {
+    try {
+      await this.fetchWithAuth('/calls/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry),
+      });
+    } catch (e) {
+      console.warn('Failed to save call history to backend:', e);
+    }
+  },
+
+  /** Get call history for a DM conversation */
+  async getDirectCallHistory(otherUserId: string): Promise<any[]> {
+    try {
+      const res = await this.fetchWithAuth(
+        `/calls/history?otherUserId=${encodeURIComponent(otherUserId)}`,
+      );
+      if (!res.ok) return [];
+      return res.json();
+    } catch (e) {
+      console.warn('Failed to fetch DM call history:', e);
+      return [];
+    }
+  },
+
+  /** Get call history for a channel (group calls) */
+  async getChannelCallHistory(channelName: string): Promise<any[]> {
+    try {
+      const res = await this.fetchWithAuth(
+        `/calls/history?channelName=${encodeURIComponent(channelName)}`,
+      );
+      if (!res.ok) return [];
+      return res.json();
+    } catch (e) {
+      console.warn('Failed to fetch channel call history:', e);
+      return [];
+    }
+  },
 };
+
 

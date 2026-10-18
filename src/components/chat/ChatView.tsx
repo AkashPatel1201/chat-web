@@ -10,7 +10,9 @@ import { MessageItem } from './MessageItem';
 import { ChatInput } from './ChatInput';
 import { SettingsModal } from './SettingsModal';
 import { CallOverlay } from './CallOverlay';
+import { CallHistoryItem } from './CallHistoryItem';
 import { useAgoraCall } from '@/hooks/useAgoraCall';
+import type { CallHistoryEntry } from '@/hooks/useAgoraCall';
 import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -87,6 +89,7 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
     remoteUsers,
     localVideoTrack,
     screenTrack,
+    callHistory,
     startDirectCall,
     startChannelCall,
     acceptCall,
@@ -97,6 +100,49 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
     toggleScreenShare,
   } = useAgoraCall(currentUser);
 
+  // Persisted call history loaded from the backend database
+  const [persistedCallHistory, setPersistedCallHistory] = useState<CallHistoryEntry[]>([]);
+
+  // Build merged feed: regular messages + call history entries sorted by time
+  type FeedItem =
+    | { kind: 'message'; item: Message; sortKey: number }
+    | { kind: 'call'; item: CallHistoryEntry; sortKey: number };
+
+  const mergedFeed = React.useMemo<FeedItem[]>(() => {
+    const msgItems: FeedItem[] = messages.map((m) => ({
+      kind: 'message',
+      item: m,
+      sortKey: new Date(m.timestamp).getTime() || 0,
+    }));
+
+    // Combine persisted (from DB) + live (current session) call history, deduplicated by callId
+    const allCallHistory: CallHistoryEntry[] = [
+      ...persistedCallHistory,
+      ...callHistory.filter(
+        (live) => !persistedCallHistory.some((p) => p.callId === live.callId),
+      ),
+    ];
+
+    // Filter to only entries relevant to the active conversation
+    const relevantCalls = allCallHistory.filter((c) => {
+      if (activeDmId && c.isDirect && c.targetUser) {
+        return c.targetUser.id === activeDmId;
+      }
+      if (activeChannelId && !c.isDirect && c.targetChannelName) {
+        const currentChan = channels.find((ch) => ch.id === activeChannelId);
+        return currentChan?.name === c.targetChannelName;
+      }
+      return false;
+    });
+
+    const callItems: FeedItem[] = relevantCalls.map((c) => ({
+      kind: 'call',
+      item: c,
+      sortKey: new Date(c.timestamp).getTime() || 0,
+    }));
+
+    return [...msgItems, ...callItems].sort((a, b) => a.sortKey - b.sortKey);
+  }, [messages, callHistory, persistedCallHistory, activeDmId, activeChannelId, channels]);
   // Auto scroll to bottom
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
     messagesEndRef.current?.scrollIntoView({ behavior });
@@ -104,7 +150,7 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [mergedFeed]);
 
   // 1. Load initial workspace data (channels, DMs, users) once on mount
   useEffect(() => {
@@ -141,31 +187,66 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
     };
   }, []);
 
-  // 2. Fetch messages only when the selected Channel or Direct Message changes
+  // 2. Fetch messages + call history when the selected Channel or DM changes
   const fetchMessagesForActive = useCallback(async (silent = false) => {
     if (!activeChannelId && !activeDmId) return;
 
     if (!silent) setIsLoadingMessages(true);
     try {
       if (activeDmId) {
-        const dmMessages = await api.getDirectMessages(activeDmId);
+        const [dmMessages, rawCallHistory] = await Promise.all([
+          api.getDirectMessages(activeDmId),
+          api.getDirectCallHistory(activeDmId),
+        ]);
         setMessages(dmMessages);
+        // Map backend records → CallHistoryEntry shape used by CallHistoryItem
+        const mapped: CallHistoryEntry[] = rawCallHistory.map((r: any) => ({
+          id: r.id,
+          callId: r.callId,
+          callType: r.callType as 'voice' | 'video',
+          isDirect: r.isDirect,
+          status: r.status as any,
+          targetUser: r.callerId === currentUser.id
+            ? (r.recipient
+                ? { id: r.recipient.id, name: r.recipient.name, email: r.recipient.email, avatarUrl: r.recipient.avatarUrl }
+                : undefined)
+            : { id: r.caller.id, name: r.caller.name, email: r.caller.email, avatarUrl: r.caller.avatarUrl },
+          timestamp: r.createdAt,
+          durationSeconds: r.durationSeconds ?? undefined,
+          isOutgoing: r.callerId === currentUser.id,
+        }));
+        setPersistedCallHistory(mapped);
       } else if (activeChannelId) {
-        const [chanMessages, details] = await Promise.all([
+        const currentChan = channels.find((c) => c.id === activeChannelId);
+        const [chanMessages, details, rawCallHistory] = await Promise.all([
           api.getChannelMessages(activeChannelId),
           api.getChannelDetails(activeChannelId).catch(() => null),
+          currentChan ? api.getChannelCallHistory(currentChan.name) : Promise.resolve([]),
         ]);
         setMessages(chanMessages);
         if (details) {
           setChannelDetails(details);
         }
+        const mapped: CallHistoryEntry[] = rawCallHistory.map((r: any) => ({
+          id: r.id,
+          callId: r.callId,
+          callType: r.callType as 'voice' | 'video',
+          isDirect: false,
+          status: r.status as any,
+          targetChannelName: r.channelName ?? currentChan?.name,
+          timestamp: r.createdAt,
+          durationSeconds: r.durationSeconds ?? undefined,
+          isOutgoing: r.callerId === currentUser.id,
+        }));
+        setPersistedCallHistory(mapped);
       }
     } catch (err) {
       console.error('Failed to load conversation messages:', err);
     } finally {
       if (!silent) setIsLoadingMessages(false);
     }
-  }, [activeChannelId, activeDmId]);
+  }, [activeChannelId, activeDmId, channels, currentUser.id]);
+
 
   useEffect(() => {
     fetchMessagesForActive(false);
@@ -605,20 +686,28 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
             <div className="flex justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
             </div>
-          ) : messages.length === 0 ? (
+          ) : mergedFeed.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground text-xs">
               No messages yet in this conversation. Send the first message below!
             </div>
           ) : (
-            messages.map((msg) => (
-              <MessageItem
-                key={msg.id}
-                message={msg}
-                currentUser={userProfile}
-                onReact={handleReact}
-                onDelete={handleDeleteMessage}
-              />
-            ))
+            mergedFeed.map((feedItem) =>
+              feedItem.kind === 'call' ? (
+                <CallHistoryItem
+                  key={feedItem.item.id}
+                  entry={feedItem.item}
+                  currentUserId={currentUser.id}
+                />
+              ) : (
+                <MessageItem
+                  key={feedItem.item.id}
+                  message={feedItem.item}
+                  currentUser={userProfile}
+                  onReact={handleReact}
+                  onDelete={handleDeleteMessage}
+                />
+              )
+            )
           )}
 
           <div ref={messagesEndRef} />

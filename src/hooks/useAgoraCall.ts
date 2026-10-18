@@ -15,6 +15,25 @@ import { User, Channel } from '@/types/chat';
 export type CallType = 'voice' | 'video';
 export type CallStatus = 'idle' | 'outgoing' | 'incoming' | 'connected' | 'ended';
 
+export type CallHistoryStatus = 'outgoing' | 'incoming' | 'missed' | 'declined' | 'ended';
+
+export interface CallHistoryEntry {
+  id: string;
+  callId: string;
+  callType: CallType;
+  isDirect: boolean;
+  status: CallHistoryStatus;
+  /** The other participant's info (null for channel calls) */
+  targetUser?: { id: string; name?: string | null; email?: string; avatarUrl?: string | null };
+  targetChannelName?: string;
+  /** Timestamp when the call event occurred */
+  timestamp: string;
+  /** Duration in seconds (only set when status = 'ended') */
+  durationSeconds?: number;
+  /** Whether the current user was the caller */
+  isOutgoing: boolean;
+}
+
 export interface ActiveCallInfo {
   callId: string;
   channelName: string;
@@ -39,7 +58,7 @@ class CallSoundSynthesizer {
       }
     }
     if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume().catch(() => {});
+      this.ctx.resume().catch(() => { });
     }
     return this.ctx;
   }
@@ -54,7 +73,7 @@ class CallSoundSynthesizer {
       try {
         if (!this.ctx || this.ctx.state === 'closed') return;
         const now = this.ctx.currentTime;
-        
+
         // Tone 1 (High bell)
         const osc1 = this.ctx.createOscillator();
         const gain1 = this.ctx.createGain();
@@ -109,7 +128,7 @@ class CallSoundSynthesizer {
         gain.connect(this.ctx.destination);
         osc.start(now);
         osc.stop(now + 1.25);
-      } catch (e) {}
+      } catch (e) { }
     };
 
     playBeep();
@@ -133,7 +152,7 @@ class CallSoundSynthesizer {
       gain.connect(ctx.destination);
       osc.start(now);
       osc.stop(now + 0.45);
-    } catch (e) {}
+    } catch (e) { }
   }
 
   public stop() {
@@ -155,6 +174,27 @@ export function useAgoraCall(currentUser: User | null) {
   const [isScreenSharing, setIsScreenSharing] = useState<boolean>(false);
   const [networkQuality, setNetworkQuality] = useState<'excellent' | 'good' | 'poor'>('good');
   const [remoteUsers, setRemoteUsers] = useState<IAgoraRTCRemoteUser[]>([]);
+  const [callHistory, setCallHistory] = useState<CallHistoryEntry[]>([]);
+
+  // Track current call's start time for duration calculation
+  const callStartTimeRef = useRef<number | null>(null);
+
+  /** Append a new entry to call history AND persist it to the backend */
+  const addCallHistoryEntry = useCallback((entry: CallHistoryEntry) => {
+    setCallHistory((prev) => [...prev, entry]);
+    // Map 'incoming' (frontend-only transient state) to 'missed' before persisting
+    const backendStatus = entry.status === 'incoming' ? 'missed' : entry.status;
+    // Fire-and-forget persist to backend (non-blocking)
+    api.saveCallHistory({
+      callId: entry.callId,
+      callType: entry.callType,
+      status: backendStatus,
+      isDirect: entry.isDirect,
+      recipientId: entry.isDirect ? entry.targetUser?.id : undefined,
+      channelName: !entry.isDirect ? entry.targetChannelName : undefined,
+      durationSeconds: entry.durationSeconds,
+    }).catch(() => { /* silently ignore backend errors */ });
+  }, []);
 
   // Agora Client and Tracks refs
   const agoraClientRef = useRef<IAgoraRTCClient | null>(null);
@@ -180,6 +220,7 @@ export function useAgoraCall(currentUser: User | null) {
   useEffect(() => {
     if (callStatus === 'connected') {
       setCallDuration(0);
+      callStartTimeRef.current = Date.now();
       timerRef.current = setInterval(() => {
         setCallDuration((prev) => prev + 1);
       }, 1000);
@@ -190,6 +231,7 @@ export function useAgoraCall(currentUser: User | null) {
       }
       if (callStatus === 'idle') {
         setCallDuration(0);
+        callStartTimeRef.current = null;
       }
     }
     return () => {
@@ -205,7 +247,7 @@ export function useAgoraCall(currentUser: User | null) {
       try {
         localAudioTrackRef.current.stop();
         localAudioTrackRef.current.close();
-      } catch (e) {}
+      } catch (e) { }
       localAudioTrackRef.current = null;
     }
 
@@ -213,7 +255,7 @@ export function useAgoraCall(currentUser: User | null) {
       try {
         localVideoTrackRef.current.stop();
         localVideoTrackRef.current.close();
-      } catch (e) {}
+      } catch (e) { }
       localVideoTrackRef.current = null;
     }
 
@@ -221,14 +263,14 @@ export function useAgoraCall(currentUser: User | null) {
       try {
         screenTrackRef.current.stop();
         screenTrackRef.current.close();
-      } catch (e) {}
+      } catch (e) { }
       screenTrackRef.current = null;
     }
 
     if (agoraClientRef.current) {
       try {
         await agoraClientRef.current.leave();
-      } catch (e) {}
+      } catch (e) { }
       agoraClientRef.current = null;
     }
 
@@ -266,7 +308,17 @@ export function useAgoraCall(currentUser: User | null) {
           await client.subscribe(user, mediaType);
 
           if (mediaType === 'audio') {
-            user.audioTrack?.play();
+            // Wrap in async try/catch to handle browser autoplay policy
+            // (NotAllowedError) and play/pause race conditions gracefully.
+            (async () => {
+              try {
+                await user.audioTrack?.play();
+              } catch (e: any) {
+                // Autoplay was blocked or interrupted — not a fatal error.
+                // The track will resume once the user interacts with the page.
+                console.warn('Remote audio autoplay blocked:', e?.message ?? e);
+              }
+            })();
           }
 
           setRemoteUsers((prev) => {
@@ -394,6 +446,30 @@ export function useAgoraCall(currentUser: User | null) {
     // Call was rejected by recipient
     const unsubRejected = socketClient.on('call_rejected', (data) => {
       soundSynth.playEndBeep();
+      // Record declined call in history
+      setActiveCall((currentCall) => {
+        if (currentCall) {
+          addCallHistoryEntry({
+            id: `hist_${Date.now()}`,
+            callId: currentCall.callId,
+            callType: currentCall.callType,
+            isDirect: currentCall.isDirect,
+            status: 'declined',
+            targetUser: currentCall.targetUser
+              ? {
+                  id: currentCall.targetUser.id,
+                  name: currentCall.targetUser.name,
+                  email: currentCall.targetUser.email,
+                  avatarUrl: currentCall.targetUser.avatarUrl,
+                }
+              : undefined,
+            targetChannelName: currentCall.targetChannel?.name,
+            timestamp: new Date().toISOString(),
+            isOutgoing: !currentCall.isIncoming,
+          });
+        }
+        return currentCall;
+      });
       setCallStatus('ended');
       cleanupAgora();
       setTimeout(() => {
@@ -405,6 +481,34 @@ export function useAgoraCall(currentUser: User | null) {
     // Call was ended by either party
     const unsubEnded = socketClient.on('call_ended', () => {
       soundSynth.playEndBeep();
+      // Record ended call in history
+      const durationSecs = callStartTimeRef.current
+        ? Math.round((Date.now() - callStartTimeRef.current) / 1000)
+        : undefined;
+      setActiveCall((currentCall) => {
+        if (currentCall) {
+          addCallHistoryEntry({
+            id: `hist_${Date.now()}`,
+            callId: currentCall.callId,
+            callType: currentCall.callType,
+            isDirect: currentCall.isDirect,
+            status: 'ended',
+            targetUser: currentCall.targetUser
+              ? {
+                  id: currentCall.targetUser.id,
+                  name: currentCall.targetUser.name,
+                  email: currentCall.targetUser.email,
+                  avatarUrl: currentCall.targetUser.avatarUrl,
+                }
+              : undefined,
+            targetChannelName: currentCall.targetChannel?.name,
+            timestamp: new Date().toISOString(),
+            durationSeconds: durationSecs,
+            isOutgoing: !currentCall.isIncoming,
+          });
+        }
+        return currentCall;
+      });
       setCallStatus('ended');
       cleanupAgora();
       setTimeout(() => {
@@ -509,10 +613,30 @@ export function useAgoraCall(currentUser: User | null) {
         socketClient.rejectCall(activeCall.targetUser.id, activeCall.callId, reason);
       }
 
+      // Record missed/declined incoming call in history
+      addCallHistoryEntry({
+        id: `hist_${Date.now()}`,
+        callId: activeCall.callId,
+        callType: activeCall.callType,
+        isDirect: activeCall.isDirect,
+        status: activeCall.isIncoming ? 'missed' : 'declined',
+        targetUser: activeCall.targetUser
+          ? {
+              id: activeCall.targetUser.id,
+              name: activeCall.targetUser.name,
+              email: activeCall.targetUser.email,
+              avatarUrl: activeCall.targetUser.avatarUrl,
+            }
+          : undefined,
+        targetChannelName: activeCall.targetChannel?.name,
+        timestamp: new Date().toISOString(),
+        isOutgoing: !activeCall.isIncoming,
+      });
+
       setCallStatus('idle');
       setActiveCall(null);
     },
-    [activeCall],
+    [activeCall, addCallHistoryEntry],
   );
 
   // End current active or outgoing call
@@ -520,6 +644,32 @@ export function useAgoraCall(currentUser: User | null) {
     soundSynth.playEndBeep();
 
     if (activeCall) {
+      const durationSecs = callStartTimeRef.current
+        ? Math.round((Date.now() - callStartTimeRef.current) / 1000)
+        : undefined;
+
+      // Record in call history
+      addCallHistoryEntry({
+        id: `hist_${Date.now()}`,
+        callId: activeCall.callId,
+        callType: activeCall.callType,
+        isDirect: activeCall.isDirect,
+        // If we called out and no one answered (outgoing, no connection), mark as outgoing
+        status: callStartTimeRef.current ? 'ended' : 'outgoing',
+        targetUser: activeCall.targetUser
+          ? {
+              id: activeCall.targetUser.id,
+              name: activeCall.targetUser.name,
+              email: activeCall.targetUser.email,
+              avatarUrl: activeCall.targetUser.avatarUrl,
+            }
+          : undefined,
+        targetChannelName: activeCall.targetChannel?.name,
+        timestamp: new Date().toISOString(),
+        durationSeconds: durationSecs,
+        isOutgoing: !activeCall.isIncoming,
+      });
+
       if (activeCall.isDirect && activeCall.targetUser?.id) {
         socketClient.endCall({
           recipientId: activeCall.targetUser.id,
@@ -545,7 +695,7 @@ export function useAgoraCall(currentUser: User | null) {
       setCallStatus('idle');
       setActiveCall(null);
     }, 1200);
-  }, [activeCall, cleanupAgora]);
+  }, [activeCall, cleanupAgora, addCallHistoryEntry]);
 
   // Toggle Microphone Mute
   const toggleAudio = useCallback(() => {
@@ -643,6 +793,7 @@ export function useAgoraCall(currentUser: User | null) {
     localAudioTrack: localAudioTrackRef.current,
     localVideoTrack: localVideoTrackRef.current,
     screenTrack: screenTrackRef.current,
+    callHistory,
     startDirectCall,
     startChannelCall,
     acceptCall,

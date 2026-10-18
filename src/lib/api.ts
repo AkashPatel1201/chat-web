@@ -747,18 +747,23 @@ export const api = {
   async saveCallHistory(entry: {
     callId: string;
     callType: 'voice' | 'video';
-    status: 'ended' | 'missed' | 'declined' | 'outgoing';
+    status: 'ended' | 'missed' | 'declined' | 'outgoing' | string;
     isDirect: boolean;
+    callerId?: string;
     recipientId?: string;
     channelName?: string;
     durationSeconds?: number;
   }): Promise<void> {
     try {
-      await this.fetchWithAuth('/calls/history', {
+      const res = await this.fetchWithAuth('/calls/history', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(entry),
       });
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error('Failed to save call history to backend:', res.status, errorText);
+      }
     } catch (e) {
       console.warn('Failed to save call history to backend:', e);
     }

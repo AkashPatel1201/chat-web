@@ -115,13 +115,17 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
       sortKey: new Date(m.timestamp).getTime() || 0,
     }));
 
-    // Combine persisted (from DB) + live (current session) call history, deduplicated by callId
-    const allCallHistory: CallHistoryEntry[] = [
-      ...persistedCallHistory,
-      ...callHistory.filter(
-        (live) => !persistedCallHistory.some((p) => p.callId === live.callId),
-      ),
-    ];
+    // Combine and strictly deduplicate call history by callId (preferring records with duration)
+    const callMap = new Map<string, CallHistoryEntry>();
+    for (const c of [...persistedCallHistory, ...callHistory]) {
+      const existing = callMap.get(c.callId);
+      if (!existing) {
+        callMap.set(c.callId, c);
+      } else if (c.durationSeconds && !existing.durationSeconds) {
+        callMap.set(c.callId, c);
+      }
+    }
+    const allCallHistory = Array.from(callMap.values());
 
     // Filter to only entries relevant to the active conversation
     const relevantCalls = allCallHistory.filter((c) => {
@@ -209,8 +213,10 @@ export function ChatView({ currentUser, onLogout }: ChatViewProps) {
           targetUser: r.callerId === currentUser.id
             ? (r.recipient
                 ? { id: r.recipient.id, name: r.recipient.name, email: r.recipient.email, avatarUrl: r.recipient.avatarUrl }
-                : undefined)
-            : { id: r.caller.id, name: r.caller.name, email: r.caller.email, avatarUrl: r.caller.avatarUrl },
+                : (activeDmId ? { id: activeDmId, name: activeDmUser?.name || 'User' } : undefined))
+            : (r.caller
+                ? { id: r.caller.id, name: r.caller.name, email: r.caller.email, avatarUrl: r.caller.avatarUrl }
+                : (activeDmId ? { id: activeDmId, name: activeDmUser?.name || 'User' } : undefined)),
           timestamp: r.createdAt,
           durationSeconds: r.durationSeconds ?? undefined,
           isOutgoing: r.callerId === currentUser.id,

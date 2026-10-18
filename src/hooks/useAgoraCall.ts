@@ -179,22 +179,51 @@ export function useAgoraCall(currentUser: User | null) {
   // Track current call's start time for duration calculation
   const callStartTimeRef = useRef<number | null>(null);
 
+  // Keep ref to activeCall so event handlers and async callbacks always have access to current call state
+  const activeCallRef = useRef<ActiveCallInfo | null>(null);
+  useEffect(() => {
+    activeCallRef.current = activeCall;
+  }, [activeCall]);
+
   /** Append a new entry to call history AND persist it to the backend */
   const addCallHistoryEntry = useCallback((entry: CallHistoryEntry) => {
-    setCallHistory((prev) => [...prev, entry]);
+    setCallHistory((prev) => {
+      if (prev.some((e) => e.callId === entry.callId)) {
+        return prev.map((e) => (e.callId === entry.callId ? entry : e));
+      }
+      return [...prev, entry];
+    });
+
     // Map 'incoming' (frontend-only transient state) to 'missed' before persisting
     const backendStatus = entry.status === 'incoming' ? 'missed' : entry.status;
-    // Fire-and-forget persist to backend (non-blocking)
+
+    let callerId: string | undefined = currentUser?.id;
+    let recipientId: string | undefined = undefined;
+
+    if (entry.isDirect) {
+      if (entry.isOutgoing) {
+        callerId = currentUser?.id;
+        recipientId = entry.targetUser?.id;
+      } else {
+        callerId = entry.targetUser?.id;
+        recipientId = currentUser?.id;
+      }
+    }
+
+    // Persist to backend (non-blocking)
     api.saveCallHistory({
       callId: entry.callId,
       callType: entry.callType,
       status: backendStatus,
       isDirect: entry.isDirect,
-      recipientId: entry.isDirect ? entry.targetUser?.id : undefined,
+      callerId,
+      recipientId,
       channelName: !entry.isDirect ? entry.targetChannelName : undefined,
       durationSeconds: entry.durationSeconds,
-    }).catch(() => { /* silently ignore backend errors */ });
-  }, []);
+    }).catch((err) => {
+      console.warn('Could not persist call history:', err);
+    });
+  }, [currentUser]);
 
   // Agora Client and Tracks refs
   const agoraClientRef = useRef<IAgoraRTCClient | null>(null);
@@ -446,30 +475,27 @@ export function useAgoraCall(currentUser: User | null) {
     // Call was rejected by recipient
     const unsubRejected = socketClient.on('call_rejected', (data) => {
       soundSynth.playEndBeep();
-      // Record declined call in history
-      setActiveCall((currentCall) => {
-        if (currentCall) {
-          addCallHistoryEntry({
-            id: `hist_${Date.now()}`,
-            callId: currentCall.callId,
-            callType: currentCall.callType,
-            isDirect: currentCall.isDirect,
-            status: 'declined',
-            targetUser: currentCall.targetUser
-              ? {
-                  id: currentCall.targetUser.id,
-                  name: currentCall.targetUser.name,
-                  email: currentCall.targetUser.email,
-                  avatarUrl: currentCall.targetUser.avatarUrl,
-                }
-              : undefined,
-            targetChannelName: currentCall.targetChannel?.name,
-            timestamp: new Date().toISOString(),
-            isOutgoing: !currentCall.isIncoming,
-          });
-        }
-        return currentCall;
-      });
+      const currentCall = activeCallRef.current;
+      if (currentCall) {
+        addCallHistoryEntry({
+          id: `hist_${Date.now()}`,
+          callId: currentCall.callId,
+          callType: currentCall.callType,
+          isDirect: currentCall.isDirect,
+          status: 'declined',
+          targetUser: currentCall.targetUser
+            ? {
+                id: currentCall.targetUser.id,
+                name: currentCall.targetUser.name,
+                email: currentCall.targetUser.email,
+                avatarUrl: currentCall.targetUser.avatarUrl,
+              }
+            : undefined,
+          targetChannelName: currentCall.targetChannel?.name,
+          timestamp: new Date().toISOString(),
+          isOutgoing: !currentCall.isIncoming,
+        });
+      }
       setCallStatus('ended');
       cleanupAgora();
       setTimeout(() => {
@@ -481,34 +507,31 @@ export function useAgoraCall(currentUser: User | null) {
     // Call was ended by either party
     const unsubEnded = socketClient.on('call_ended', () => {
       soundSynth.playEndBeep();
-      // Record ended call in history
       const durationSecs = callStartTimeRef.current
         ? Math.round((Date.now() - callStartTimeRef.current) / 1000)
         : undefined;
-      setActiveCall((currentCall) => {
-        if (currentCall) {
-          addCallHistoryEntry({
-            id: `hist_${Date.now()}`,
-            callId: currentCall.callId,
-            callType: currentCall.callType,
-            isDirect: currentCall.isDirect,
-            status: 'ended',
-            targetUser: currentCall.targetUser
-              ? {
-                  id: currentCall.targetUser.id,
-                  name: currentCall.targetUser.name,
-                  email: currentCall.targetUser.email,
-                  avatarUrl: currentCall.targetUser.avatarUrl,
-                }
-              : undefined,
-            targetChannelName: currentCall.targetChannel?.name,
-            timestamp: new Date().toISOString(),
-            durationSeconds: durationSecs,
-            isOutgoing: !currentCall.isIncoming,
-          });
-        }
-        return currentCall;
-      });
+      const currentCall = activeCallRef.current;
+      if (currentCall) {
+        addCallHistoryEntry({
+          id: `hist_${Date.now()}`,
+          callId: currentCall.callId,
+          callType: currentCall.callType,
+          isDirect: currentCall.isDirect,
+          status: 'ended',
+          targetUser: currentCall.targetUser
+            ? {
+                id: currentCall.targetUser.id,
+                name: currentCall.targetUser.name,
+                email: currentCall.targetUser.email,
+                avatarUrl: currentCall.targetUser.avatarUrl,
+              }
+            : undefined,
+          targetChannelName: currentCall.targetChannel?.name,
+          timestamp: new Date().toISOString(),
+          durationSeconds: durationSecs,
+          isOutgoing: !currentCall.isIncoming,
+        });
+      }
       setCallStatus('ended');
       cleanupAgora();
       setTimeout(() => {
